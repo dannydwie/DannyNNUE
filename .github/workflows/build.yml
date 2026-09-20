@@ -22,3 +22,10 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release -j2
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: DannyNNUE-linux
+          path: build/
+          if-no-files-found: error
