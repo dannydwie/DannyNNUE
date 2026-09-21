@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
@@ -19,22 +20,29 @@ enum Piece : int {
 };
 
 enum Flag : uint8_t {
-    QUIET=0, CAPTURE=1, DOUBLE_PUSH=2, EP_CAPTURE=4,
-    KING_CASTLE=8, QUEEN_CASTLE=16, PROMOTION=32
+    QUIET=0,
+    CAPTURE=1,
+    DOUBLE_PUSH=2,
+    EP_CAPTURE=4,
+    KING_CASTLE=8,
+    QUEEN_CASTLE=16,
+    PROMOTION=32
 };
 
 struct Move {
-    uint8_t from=0, to=0;
+    uint8_t from=0,to=0;
     int8_t promotion=0;
     uint8_t flags=QUIET;
 };
 
 static uint64_t zobrist[13][64];
-static uint64_t zobSide, zobCastle[16], zobEp[64];
+static uint64_t zobSide,zobCastle[16],zobEp[64];
 
 static uint64_t rng64() {
     static uint64_t x=0x9e3779b97f4a7c15ULL;
-    x^=x>>12; x^=x<<25; x^=x>>27;
+    x^=x>>12;
+    x^=x<<25;
+    x^=x>>27;
     return x*0x2545F4914F6CDD1DULL;
 }
 
@@ -57,7 +65,8 @@ struct Board {
     bool white=true;
     uint8_t castle=15;
     int ep=-1;
-    int halfmove=0, fullmove=1;
+    int halfmove=0;
+    int fullmove=1;
 
     void startpos() {
         b.fill(EMPTY);
@@ -84,14 +93,15 @@ struct Board {
         uint64_t k=0;
 
         for(int s=0;s<64;s++) {
-            if(b[s]) {
-                int idx =
-                    b[s]>0
-                    ? (b[s]-1)
-                    : (6+(-b[s]-1));
+            if(!b[s])
+                continue;
 
-                k^=zobrist[idx][s];
-            }
+            int idx=
+                b[s]>0
+                ? b[s]-1
+                : 6+(-b[s]-1);
+
+            k^=zobrist[idx][s];
         }
 
         if(white)
@@ -153,7 +163,7 @@ static string sq(int s) {
 }
 
 static string uciMove(const Move&m) {
-    if(m.from>=64 || m.to>=64)
+    if(m.from>=64||m.to>=64)
         return "0000";
 
     string r=sq(m.from)+sq(m.to);
@@ -171,14 +181,13 @@ static string uciMove(const Move&m) {
 }
 
 static bool attacked(
-    const Board& x,
+    const Board&x,
     int s,
     bool byWhite
 ) {
     int f=fileOf(s);
     int r=rankOf(s);
 
-    // Pawns
     int pr=byWhite?r-1:r+1;
 
     if(pr>=0&&pr<8) {
@@ -194,7 +203,6 @@ static bool attacked(
         }
     }
 
-    // Knights
     static const int kn[8][2]={
         {1,2},{2,1},{2,-1},{1,-2},
         {-1,-2},{-2,-1},{-2,1},{-1,2}
@@ -204,12 +212,13 @@ static bool attacked(
         int nf=f+d[0];
         int nr=r+d[1];
 
-        if(inside(nf,nr) &&
-           x.b[nr*8+nf]==(byWhite?WN:BN))
+        if(
+            inside(nf,nr)&&
+            x.b[nr*8+nf]==(byWhite?WN:BN)
+        )
             return true;
     }
 
-    // Bishops / Queens
     static const int diag[4][2]={
         {1,1},{1,-1},{-1,1},{-1,-1}
     };
@@ -228,8 +237,10 @@ static bool attacked(
             int p=x.b[nr*8+nf];
 
             if(p) {
-                if(p==(byWhite?WB:BB) ||
-                   p==(byWhite?WQ:BQ))
+                if(
+                    p==(byWhite?WB:BB)||
+                    p==(byWhite?WQ:BQ)
+                )
                     return true;
 
                 break;
@@ -237,7 +248,6 @@ static bool attacked(
         }
     }
 
-    // Rooks / Queens
     static const int ortho[4][2]={
         {1,0},{-1,0},{0,1},{0,-1}
     };
@@ -256,8 +266,10 @@ static bool attacked(
             int p=x.b[nr*8+nf];
 
             if(p) {
-                if(p==(byWhite?WR:BR) ||
-                   p==(byWhite?WQ:BQ))
+                if(
+                    p==(byWhite?WR:BR)||
+                    p==(byWhite?WQ:BQ)
+                )
                     return true;
 
                 break;
@@ -265,7 +277,6 @@ static bool attacked(
         }
     }
 
-    // King
     for(int df=-1;df<=1;df++) {
         for(int dr=-1;dr<=1;dr++) {
             if(!df&&!dr)
@@ -274,8 +285,10 @@ static bool attacked(
             int nf=f+df;
             int nr=r+dr;
 
-            if(inside(nf,nr) &&
-               x.b[nr*8+nf]==(byWhite?WK:BK))
+            if(
+                inside(nf,nr)&&
+                x.b[nr*8+nf]==(byWhite?WK:BK)
+            )
                 return true;
         }
     }
@@ -284,7 +297,7 @@ static bool attacked(
 }
 
 static int kingSquare(
-    const Board& x,
+    const Board&x,
     bool w
 ) {
     int k=w?WK:BK;
@@ -298,12 +311,12 @@ static int kingSquare(
 }
 
 static bool inCheck(
-    const Board& x,
+    const Board&x,
     bool w
 ) {
     int k=kingSquare(x,w);
 
-    return k>=0 && attacked(x,k,!w);
+    return k>=0&&attacked(x,k,!w);
 }
 
 static void add(
@@ -324,7 +337,7 @@ static void add(
 }
 
 static void pseudo(
-    const Board& x,
+    const Board&x,
     vector<Move>&m
 ) {
     m.clear();
@@ -341,7 +354,6 @@ static void pseudo(
         int r=rankOf(s);
         int a=abs(p);
 
-        // Pawn
         if(a==WP) {
             int d=w?1:-1;
             int nr=r+d;
@@ -357,7 +369,13 @@ static void pseudo(
                             w?WB:BB,
                             w?WN:BN
                         })
-                            add(m,s,t,PROMOTION,q);
+                            add(
+                                m,
+                                s,
+                                t,
+                                PROMOTION,
+                                q
+                            );
                     }
                     else {
                         add(m,s,t);
@@ -366,8 +384,10 @@ static void pseudo(
                     int sr=w?1:6;
                     int nr2=r+2*d;
 
-                    if(r==sr &&
-                       x.b[nr2*8+f]==EMPTY)
+                    if(
+                        r==sr&&
+                        x.b[nr2*8+f]==EMPTY
+                    )
                         add(
                             m,
                             s,
@@ -384,9 +404,10 @@ static void pseudo(
 
                     t=nr*8+nf;
 
-                    if(enemy(x.b[t],w) &&
-                       abs(x.b[t])!=WK) {
-
+                    if(
+                        enemy(x.b[t],w)&&
+                        abs(x.b[t])!=WK
+                    ) {
                         if(nr==0||nr==7) {
                             for(int q:{
                                 w?WQ:BQ,
@@ -441,7 +462,6 @@ static void pseudo(
             }
         }
 
-        // Knight
         else if(a==WN) {
             static const int d[8][2]={
                 {1,2},{2,1},{2,-1},{1,-2},
@@ -452,30 +472,37 @@ static void pseudo(
                 int nf=f+z[0];
                 int nr=r+z[1];
 
-                if(inside(nf,nr)) {
-                    int t=nr*8+nf;
+                if(!inside(nf,nr))
+                    continue;
 
-                    if(!own(x.b[t],w) &&
-                       abs(x.b[t])!=WK)
-                        add(
-                            m,
-                            s,
-                            t,
-                            x.b[t]?CAPTURE:QUIET
-                        );
-                }
+                int t=nr*8+nf;
+
+                if(
+                    !own(x.b[t],w)&&
+                    abs(x.b[t])!=WK
+                )
+                    add(
+                        m,
+                        s,
+                        t,
+                        x.b[t]?CAPTURE:QUIET
+                    );
             }
         }
 
-        // Bishop / Rook / Queen
         else if(a==WB||a==WR||a==WQ) {
             static const int dirs[8][2]={
                 {1,1},{1,-1},{-1,1},{-1,-1},
                 {1,0},{-1,0},{0,1},{0,-1}
             };
 
-            int first=a==WB?0:a==WR?4:0;
-            int last=a==WB?4:a==WR?8:8;
+            int first=
+                a==WB?0:
+                a==WR?4:0;
+
+            int last=
+                a==WB?4:
+                a==WR?8:8;
 
             for(int di=first;di<last;di++) {
                 int nf=f;
@@ -494,8 +521,10 @@ static void pseudo(
                         add(m,s,t);
                     }
                     else {
-                        if(enemy(x.b[t],w) &&
-                           abs(x.b[t])!=WK)
+                        if(
+                            enemy(x.b[t],w)&&
+                            abs(x.b[t])!=WK
+                        )
                             add(
                                 m,
                                 s,
@@ -509,7 +538,6 @@ static void pseudo(
             }
         }
 
-        // King
         else if(a==WK) {
             for(int df=-1;df<=1;df++) {
                 for(int dr=-1;dr<=1;dr++) {
@@ -519,92 +547,70 @@ static void pseudo(
                     int nf=f+df;
                     int nr=r+dr;
 
-                    if(inside(nf,nr)) {
-                        int t=nr*8+nf;
+                    if(!inside(nf,nr))
+                        continue;
 
-                        if(!own(x.b[t],w) &&
-                           abs(x.b[t])!=WK)
-                            add(
-                                m,
-                                s,
-                                t,
-                                x.b[t]?CAPTURE:QUIET
-                            );
-                    }
+                    int t=nr*8+nf;
+
+                    if(
+                        !own(x.b[t],w)&&
+                        abs(x.b[t])!=WK
+                    )
+                        add(
+                            m,
+                            s,
+                            t,
+                            x.b[t]?CAPTURE:QUIET
+                        );
                 }
             }
 
-            // White castling
-            if(w && s==4 && !inCheck(x,true)) {
+            if(w&&s==4&&!inCheck(x,true)) {
                 if(
-                    (x.castle&1) &&
-                    x.b[5]==EMPTY &&
-                    x.b[6]==EMPTY &&
-                    !attacked(x,5,false) &&
+                    (x.castle&1)&&
+                    x.b[5]==EMPTY&&
+                    x.b[6]==EMPTY&&
+                    !attacked(x,5,false)&&
                     !attacked(x,6,false)
                 )
-                    add(
-                        m,
-                        4,
-                        6,
-                        KING_CASTLE
-                    );
+                    add(m,4,6,KING_CASTLE);
 
                 if(
-                    (x.castle&2) &&
-                    x.b[1]==EMPTY &&
-                    x.b[2]==EMPTY &&
-                    x.b[3]==EMPTY &&
-                    !attacked(x,3,false) &&
+                    (x.castle&2)&&
+                    x.b[1]==EMPTY&&
+                    x.b[2]==EMPTY&&
+                    x.b[3]==EMPTY&&
+                    !attacked(x,3,false)&&
                     !attacked(x,2,false)
                 )
-                    add(
-                        m,
-                        4,
-                        2,
-                        QUEEN_CASTLE
-                    );
+                    add(m,4,2,QUEEN_CASTLE);
             }
 
-            // Black castling
-            if(!w && s==60 && !inCheck(x,false)) {
+            if(!w&&s==60&&!inCheck(x,false)) {
                 if(
-                    (x.castle&4) &&
-                    x.b[61]==EMPTY &&
-                    x.b[62]==EMPTY &&
-                    !attacked(x,61,true) &&
+                    (x.castle&4)&&
+                    x.b[61]==EMPTY&&
+                    x.b[62]==EMPTY&&
+                    !attacked(x,61,true)&&
                     !attacked(x,62,true)
                 )
-                    add(
-                        m,
-                        60,
-                        62,
-                        KING_CASTLE
-                    );
+                    add(m,60,62,KING_CASTLE);
 
                 if(
-                    (x.castle&8) &&
-                    x.b[57]==EMPTY &&
-                    x.b[58]==EMPTY &&
-                    x.b[59]==EMPTY &&
-                    !attacked(x,59,true) &&
+                    (x.castle&8)&&
+                    x.b[57]==EMPTY&&
+                    x.b[58]==EMPTY&&
+                    x.b[59]==EMPTY&&
+                    !attacked(x,59,true)&&
                     !attacked(x,58,true)
                 )
-                    add(
-                        m,
-                        60,
-                        58,
-                        QUEEN_CASTLE
-                    );
+                    add(m,60,58,QUEEN_CASTLE);
             }
         }
     }
 }
 
-static Board makeMove(
-    const Board&x,
-    const Move&m
-) {
+static Board makeMove(const Board&x,const Move&m) {
     Board n=x;
 
     int p=n.b[m.from];
@@ -619,13 +625,11 @@ static Board makeMove(
     n.b[m.to]=p;
     n.b[m.from]=EMPTY;
 
-    // En passant
     if(m.flags&EP_CAPTURE) {
         int cs=m.to+(x.white?-8:8);
         n.b[cs]=EMPTY;
     }
 
-    // King side castling
     if(m.flags&KING_CASTLE) {
         if(x.white) {
             n.b[5]=WR;
@@ -637,7 +641,6 @@ static Board makeMove(
         }
     }
 
-    // Queen side castling
     if(m.flags&QUEEN_CASTLE) {
         if(x.white) {
             n.b[3]=WR;
@@ -655,7 +658,6 @@ static Board makeMove(
     if(m.flags&DOUBLE_PUSH)
         n.ep=m.from+(x.white?8:-8);
 
-    // Castling rights
     if(p==WK)
         n.castle&=~3;
 
@@ -682,11 +684,8 @@ static Board makeMove(
     return n;
 }
 
-static vector<Move> legalMoves(
-    const Board&x
-) {
+static vector<Move> legalMoves(const Board&x) {
     vector<Move> p,l;
-
     pseudo(x,p);
 
     for(const Move&m:p) {
@@ -699,21 +698,76 @@ static vector<Move> legalMoves(
     return l;
 }
 
-static int evaluate(
-    const Board&x
-) {
-    static const int pstP[64]={
-        0,0,0,0,0,0,0,0,
-        5,10,10,-20,-20,10,10,5,
-        5,-5,-10,0,0,-10,-5,5,
-        0,0,0,20,20,0,0,0,
-        5,5,10,25,25,10,5,5,
-        10,10,20,30,30,20,10,10,
-        50,50,50,50,50,50,50,50,
-        0,0,0,0,0,0,0,0
+static int evaluate(const Board&x) {
+    static const int pawnP[64]={
+         0,  0,  0,  0,  0,  0,  0,  0,
+         5, 10, 10,-20,-20, 10, 10,  5,
+         5, -5,-10,  0,  0,-10, -5,  5,
+         0,  0,  0, 20, 20,  0,  0,  0,
+         5,  5, 10, 25, 25, 10,  5,  5,
+        10, 10, 20, 30, 30, 20, 10, 10,
+        50, 50, 50, 50, 50, 50, 50, 50,
+         0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    static const int knightP[64]={
+        -50,-40,-30,-30,-30,-30,-40,-50,
+        -40,-20,  0,  5,  5,  0,-20,-40,
+        -30,  5, 10, 15, 15, 10,  5,-30,
+        -30,  0, 15, 20, 20, 15,  0,-30,
+        -30,  5, 15, 20, 20, 15,  5,-30,
+        -30,  0, 10, 15, 15, 10,  0,-30,
+        -40,-20,  0,  0,  0,  0,-20,-40,
+        -50,-40,-30,-30,-30,-30,-40,-50
+    };
+
+    static const int bishopP[64]={
+        -20,-10,-10,-10,-10,-10,-10,-20,
+        -10,  5,  0,  0,  0,  0,  5,-10,
+        -10, 10, 10, 10, 10, 10, 10,-10,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -10,  5,  5, 10, 10,  5,  5,-10,
+        -10,  0,  5, 10, 10,  5,  0,-10,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -20,-10,-10,-10,-10,-10,-10,-20
+    };
+
+    static const int rookP[64]={
+         0,  0,  0,  5,  5,  0,  0,  0,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+         5, 10, 10, 10, 10, 10, 10,  5,
+         0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    static const int queenP[64]={
+        -20,-10,-10, -5, -5,-10,-10,-20,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5,  5,  5,  5,  0,-10,
+         -5,  0,  5,  5,  5,  5,  0, -5,
+          0,  0,  5,  5,  5,  5,  0, -5,
+        -10,  5,  5,  5,  5,  5,  0,-10,
+        -10,  0,  5,  0,  0,  0,  0,-10,
+        -20,-10,-10, -5, -5,-10,-10,-20
+    };
+
+    static const int kingP[64]={
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -20,-30,-30,-40,-40,-30,-30,-20,
+        -10,-20,-20,-20,-20,-20,-20,-10,
+         20, 20,  0,  0,  0,  0, 20, 20,
+         20, 30, 10,  0,  0, 10, 30, 20
     };
 
     int score=0;
+    int bishops[2]={0,0};
+    int pawns[2][8]={};
 
     for(int s=0;s<64;s++) {
         int p=x.b[s];
@@ -721,12 +775,85 @@ static int evaluate(
         if(!p)
             continue;
 
+        int side=p>0?0:1;
+        int a=abs(p);
+        int ps=side==0?s:63-s;
         int v=pieceValue(p);
 
-        if(abs(p)==WP)
-            v+=x.b[s]>0?pstP[s]:pstP[63-s];
+        if(a==WP) {
+            v+=pawnP[ps];
+            pawns[side][fileOf(s)]++;
+        }
+        else if(a==WN) {
+            v+=knightP[ps];
+        }
+        else if(a==WB) {
+            v+=bishopP[ps];
+            bishops[side]++;
+        }
+        else if(a==WR) {
+            v+=rookP[ps];
+        }
+        else if(a==WQ) {
+            v+=queenP[ps];
+        }
+        else if(a==WK) {
+            v+=kingP[ps];
+        }
 
         score+=p>0?v:-v;
+    }
+
+    // Bishop pair
+    if(bishops[0]>=2)
+        score+=30;
+
+    if(bishops[1]>=2)
+        score-=30;
+
+    // Pawn structure
+    for(int side=0;side<2;side++) {
+        int sign=side==0?1:-1;
+
+        for(int f=0;f<8;f++) {
+            if(pawns[side][f]>=2)
+                score-=sign*12;
+
+            if(pawns[side][f]>0) {
+                bool left=
+                    f>0&&
+                    pawns[side][f-1]>0;
+
+                bool right=
+                    f<7&&
+                    pawns[side][f+1]>0;
+
+                if(!left&&!right)
+                    score-=sign*10;
+            }
+        }
+    }
+
+    // Rooks on open and semi-open files
+    for(int s=0;s<64;s++) {
+        int p=x.b[s];
+
+        if(abs(p)!=WR)
+            continue;
+
+        int f=fileOf(s);
+        int side=p>0?0:1;
+
+        bool ownPawn=
+            pawns[side][f]>0;
+
+        bool enemyPawn=
+            pawns[1-side][f]>0;
+
+        if(!ownPawn&&!enemyPawn)
+            score+=(side==0?1:-1)*18;
+        else if(!ownPawn)
+            score+=(side==0?1:-1)*10;
     }
 
     return x.white?score:-score;
@@ -741,10 +868,84 @@ struct TTEntry {
 
 static unordered_map<uint64_t,TTEntry> tt;
 
+// Search heuristics
+static Move killerMoves[64][2];
+static int historyHeuristic[2][64][64]{};
+
 static bool outOfTime() {
     return
-        stopSearch.load() ||
+        stopSearch.load()||
         chrono::steady_clock::now()>=deadline;
+}
+
+static int moveScore(
+    const Board&x,
+    const Move&m,
+    const Move*ttMove,
+    int ply
+) {
+    if(
+        ttMove&&
+        m.from==ttMove->from&&
+        m.to==ttMove->to&&
+        m.promotion==ttMove->promotion
+    )
+        return 20000000;
+
+    if(m.flags&PROMOTION)
+        return 9000000+
+               pieceValue(m.promotion);
+
+    if(m.flags&(CAPTURE|EP_CAPTURE)) {
+        int victim=
+            (m.flags&EP_CAPTURE)
+            ? WP
+            : x.b[m.to];
+
+        int attacker=x.b[m.from];
+
+        return
+            1000000+
+            pieceValue(victim)*16-
+            pieceValue(attacker);
+    }
+
+    if(ply<64) {
+        if(
+            m.from==killerMoves[ply][0].from&&
+            m.to==killerMoves[ply][0].to&&
+            m.promotion==killerMoves[ply][0].promotion
+        )
+            return 800000;
+
+        if(
+            m.from==killerMoves[ply][1].from&&
+            m.to==killerMoves[ply][1].to&&
+            m.promotion==killerMoves[ply][1].promotion
+        )
+            return 700000;
+    }
+
+    int side=x.white?0:1;
+
+    return historyHeuristic[side][m.from][m.to];
+}
+
+static void orderMoves(
+    const Board&x,
+    vector<Move>&moves,
+    const Move*ttMove,
+    int ply
+) {
+    stable_sort(
+        moves.begin(),
+        moves.end(),
+        [&](const Move&a,const Move&b) {
+            return
+                moveScore(x,a,ttMove,ply)>
+                moveScore(x,b,ttMove,ply);
+        }
+    );
 }
 
 static int qsearch(
@@ -758,9 +959,6 @@ static int qsearch(
 
     nodes++;
 
-    if(qdepth>3)
-        return evaluate(x);
-
     int stand=evaluate(x);
 
     if(stand>=beta)
@@ -769,11 +967,24 @@ static int qsearch(
     if(stand>alpha)
         alpha=stand;
 
+    if(qdepth>=5)
+        return alpha;
+
     auto moves=legalMoves(x);
+
+    orderMoves(
+        x,
+        moves,
+        nullptr,
+        0
+    );
 
     for(const Move&m:moves) {
         if(!(m.flags&(CAPTURE|EP_CAPTURE|PROMOTION)))
             continue;
+
+        if(outOfTime())
+            break;
 
         Board n=makeMove(x,m);
 
@@ -799,6 +1010,7 @@ static int search(
     int depth,
     int alpha,
     int beta,
+    int ply,
     Move*pvBest
 ) {
     if(outOfTime())
@@ -806,106 +1018,175 @@ static int search(
 
     nodes++;
 
+    bool root=ply==0;
+
     uint64_t key=x.key();
 
     auto it=tt.find(key);
 
-    if(
-        it!=tt.end() &&
-        it->second.depth>=depth
-    ) {
-        if(it->second.flag==0)
-            return it->second.score;
+    Move ttMove{};
+
+    if(it!=tt.end()) {
+        ttMove=it->second.best;
 
         if(
-            it->second.flag==1 &&
-            it->second.score<=alpha
-        )
-            return it->second.score;
+            !root&&
+            it->second.depth>=depth
+        ) {
+            if(it->second.flag==0)
+                return it->second.score;
 
-        if(
-            it->second.flag==2 &&
-            it->second.score>=beta
-        )
-            return it->second.score;
+            if(
+                it->second.flag==1&&
+                it->second.score<=alpha
+            )
+                return it->second.score;
+
+            if(
+                it->second.flag==2&&
+                it->second.score>=beta
+            )
+                return it->second.score;
+        }
     }
 
     if(depth<=0)
-        return evaluate(x);
+        return qsearch(x,alpha,beta);
 
     auto moves=legalMoves(x);
 
-    if(moves.empty())
-        return
-            inCheck(x,x.white)
-            ? -100000+depth
-            : 0;
+    if(moves.empty()) {
+        if(inCheck(x,x.white))
+            return -100000+ply;
 
-    stable_sort(
-        moves.begin(),
-        moves.end(),
-        [&](const Move&a,const Move&b) {
-            int sa=
-                (a.flags&(CAPTURE|EP_CAPTURE))
-                ? pieceValue(x.b[a.to])+1000
-                : 0;
+        return 0;
+    }
 
-            int sb=
-                (b.flags&(CAPTURE|EP_CAPTURE))
-                ? pieceValue(x.b[b.to])+1000
-                : 0;
-
-            return sa>sb;
-        }
+    orderMoves(
+        x,
+        moves,
+        it!=tt.end()?&ttMove:nullptr,
+        ply
     );
 
-    int origAlpha=alpha;
-    int best=-1000000;
-
+    int originalAlpha=alpha;
+    int bestScore=-1000000;
     Move bestMove=moves[0];
 
-    for(const Move&m:moves) {
+    for(size_t i=0;i<moves.size();i++) {
+        const Move&m=moves[i];
+
         if(outOfTime())
             break;
 
         Board n=makeMove(x,m);
 
-        int s=-search(
-            n,
-            depth-1,
-            -beta,
-            -alpha,
-            nullptr
-        );
+        int extension=0;
 
-        if(s>best) {
-            best=s;
+        // Check extension
+        if(inCheck(n,n.white))
+            extension=1;
+
+        int nextDepth=
+            depth-1+extension;
+
+        int score;
+
+        // Principal variation search
+        if(i==0) {
+            score=-search(
+                n,
+                nextDepth,
+                -beta,
+                -alpha,
+                ply+1,
+                nullptr
+            );
+        }
+        else {
+            score=-search(
+                n,
+                nextDepth,
+                -alpha-1,
+                -alpha,
+                ply+1,
+                nullptr
+            );
+
+            if(
+                score>alpha&&
+                score<beta
+            ) {
+                score=-search(
+                    n,
+                    nextDepth,
+                    -beta,
+                    -alpha,
+                    ply+1,
+                    nullptr
+                );
+            }
+        }
+
+        if(score>bestScore) {
+            bestScore=score;
             bestMove=m;
         }
 
-        if(s>alpha)
-            alpha=s;
+        if(score>alpha)
+            alpha=score;
 
-        if(alpha>=beta)
+        if(alpha>=beta) {
+            // Killer move
+            if(!(m.flags&(CAPTURE|EP_CAPTURE))) {
+                if(
+                    !(m.from==killerMoves[ply][0].from&&
+                      m.to==killerMoves[ply][0].to)
+                ) {
+                    killerMoves[ply][1]=killerMoves[ply][0];
+                    killerMoves[ply][0]=m;
+                }
+
+                int side=x.white?0:1;
+
+                historyHeuristic
+                    [side]
+                    [m.from]
+                    [m.to]
+                    +=depth*depth;
+
+                if(
+                    historyHeuristic
+                        [side]
+                        [m.from]
+                        [m.to]>100000
+                )
+                    historyHeuristic
+                        [side]
+                        [m.from]
+                        [m.to]=100000;
+            }
+
             break;
+        }
     }
 
     if(pvBest)
         *pvBest=bestMove;
 
     uint8_t flag=
-        best<=origAlpha
-        ? 1
-        : (best>=beta?2:0);
+        bestScore<=originalAlpha
+        ?1
+        :(bestScore>=beta?2:0);
 
     tt[key]=TTEntry{
         depth,
-        best,
+        bestScore,
         flag,
         bestMove
     };
 
-    return best;
+    return bestScore;
 }
 
 static Move think(
@@ -925,16 +1206,14 @@ static Move think(
         if(outOfTime())
             break;
 
-        int alpha=-1000000;
-        int beta=1000000;
-
         Move current=best;
 
         int score=search(
             x,
             d,
-            alpha,
-            beta,
+            -1000000,
+            1000000,
+            0,
             &current
         );
 
@@ -975,30 +1254,29 @@ static Go parseGo(
 
     stringstream ss(line);
     string t;
-    string s;
 
-    ss>>s;
+    ss>>t;
 
-    while(ss>>s) {
-        if(s=="wtime")
+    while(ss>>t) {
+        if(t=="wtime")
             ss>>g.wtime;
 
-        else if(s=="btime")
+        else if(t=="btime")
             ss>>g.btime;
 
-        else if(s=="winc")
+        else if(t=="winc")
             ss>>g.winc;
 
-        else if(s=="binc")
+        else if(t=="binc")
             ss>>g.binc;
 
-        else if(s=="movetime")
+        else if(t=="movetime")
             ss>>g.movetime;
 
-        else if(s=="depth")
+        else if(t=="depth")
             ss>>g.depth;
 
-        else if(s=="infinite")
+        else if(t=="infinite")
             g.infinite=true;
     }
 
@@ -1011,39 +1289,39 @@ static long long timeBudget(
 ) {
     if(g.movetime>=0)
         return max(
-            20LL,
-            g.movetime-20
+            30LL,
+            g.movetime-30
         );
 
     if(g.infinite)
         return 3600000;
 
-    long long t=
+    long long time=
         x.white
-        ? g.wtime
-        : g.btime;
+        ?g.wtime
+        :g.btime;
 
     long long inc=
         x.white
-        ? g.winc
-        : g.binc;
+        ?g.winc
+        :g.binc;
 
-    if(t<0)
-        return 1000;
+    if(time<0)
+        return 500;
 
-    long long b=
-        t/30+
+    long long budget=
+        time/30+
         inc*8/10;
 
-    b=max(30LL,b);
+    budget=max(40LL,budget);
 
-    b=min(
-        b,
-        max(30LL,t/2)
+    budget=min(
+        budget,
+        max(40LL,time/2)
     );
 
     return min(
-        b,
+        budget,
         5000LL
     );
 }
@@ -1053,7 +1331,9 @@ static bool parseUciMove(
     const string&s,
     Move&out
 ) {
-    for(const Move&m:legalMoves(x)) {
+    auto moves=legalMoves(x);
+
+    for(const Move&m:moves) {
         if(uciMove(m)==s) {
             out=m;
             return true;
@@ -1064,8 +1344,8 @@ static bool parseUciMove(
 }
 
 static void setFEN(
-    Board& b,
-    const string& fen
+    Board&b,
+    const string&fen
 ) {
     b.b.fill(EMPTY);
     b.castle=0;
@@ -1104,7 +1384,10 @@ static void setFEN(
             continue;
         }
 
-        if(rank<0||file>7)
+        if(
+            rank<0||
+            file>7
+        )
             continue;
 
         int p=EMPTY;
@@ -1131,7 +1414,7 @@ static void setFEN(
         file++;
     }
 
-    b.white=(side!="b");
+    b.white=side!="b";
 
     if(cast.find('K')!=string::npos)
         b.castle|=1;
@@ -1146,10 +1429,8 @@ static void setFEN(
         b.castle|=8;
 
     if(
-        ep!="-" &&
-        ep.size()==2 &&
-        ep[0]>='a'&&ep[0]<='h' &&
-        ep[1]>='1'&&ep[1]<='8'
+        ep!="-"&&
+        ep.size()==2
     )
         b.ep=
             (ep[1]-'1')*8+
@@ -1200,22 +1481,22 @@ static void applyPosition(
     if(f==string::npos)
         return;
 
-    size_t movesPos=
+    size_t mp=
         line.find(" moves",f+13);
 
     string fen=
-        movesPos==string::npos
-        ? line.substr(f+13)
-        : line.substr(
+        mp==string::npos
+        ?line.substr(f+13)
+        :line.substr(
             f+13,
-            movesPos-(f+13)
+            mp-(f+13)
         );
 
     setFEN(b,fen);
 
-    if(movesPos!=string::npos) {
+    if(mp!=string::npos) {
         stringstream ss(
-            line.substr(movesPos+7)
+            line.substr(mp+7)
         );
 
         string u;
@@ -1257,9 +1538,8 @@ int main() {
     while(getline(cin,line)) {
 
         if(line=="uci") {
-
             cout
-                <<"id name SimpleLogics 0.3 Stable UCI\n";
+                <<"id name SimpleLogics 0.4 Strength\n";
 
             cout
                 <<"id author Danny\n";
@@ -1270,17 +1550,27 @@ int main() {
         }
 
         else if(line=="isready") {
-
             cout
                 <<"readyok\n"
                 <<flush;
         }
 
         else if(line=="ucinewgame") {
-
             stopAndJoin();
 
             tt.clear();
+
+            memset(
+                killerMoves,
+                0,
+                sizeof(killerMoves)
+            );
+
+            memset(
+                historyHeuristic,
+                0,
+                sizeof(historyHeuristic)
+            );
 
             board.startpos();
         }
@@ -1289,8 +1579,7 @@ int main() {
             line.rfind(
                 "position startpos",
                 0
-            )==0 ||
-
+            )==0||
             line.rfind(
                 "position fen ",
                 0
@@ -1304,8 +1593,9 @@ int main() {
             );
         }
 
-        else if(line.rfind("go",0)==0) {
-
+        else if(
+            line.rfind("go",0)==0
+        ) {
             stopAndJoin();
 
             Board pos=board;
@@ -1317,7 +1607,6 @@ int main() {
 
             worker=thread(
                 [pos,g]() mutable {
-
                     auto start=
                         chrono::steady_clock::now();
 
@@ -1327,13 +1616,16 @@ int main() {
                             timeBudget(pos,g)
                         );
 
-                    int md=
+                    int maxDepth=
                         g.depth
-                        ? g.depth
-                        : 64;
+                        ?g.depth
+                        :64;
 
                     Move bm=
-                        think(pos,md);
+                        think(
+                            pos,
+                            maxDepth
+                        );
 
                     cout
                         <<"bestmove "
@@ -1345,14 +1637,11 @@ int main() {
         }
 
         else if(line=="stop") {
-
             stopAndJoin();
         }
 
         else if(line=="quit") {
-
             stopAndJoin();
-
             break;
         }
     }
