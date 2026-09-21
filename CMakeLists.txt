@@ -15,7 +15,10 @@ else()
     set(SF_ARCH "x86-64")
 endif()
 
+# ------------------------------------------------------------
 # SimpleLogics source modifications
+# ------------------------------------------------------------
+
 set(SIMPLELOGICS_PATCH "${CMAKE_BINARY_DIR}/simplelogics_patch.py")
 
 file(WRITE "${SIMPLELOGICS_PATCH}" [=[
@@ -25,108 +28,69 @@ import sys
 src = Path(sys.argv[1])
 
 # ------------------------------------------------------------
-# 1. Add a real SimpleLogics UCI search option
+# 1. SimpleLogics Human Mode
 # ------------------------------------------------------------
+
 engine = src / "engine.cpp"
 s = engine.read_text()
 
-old = '    options.add("Move Overhead", Option(10, 0, 5000));'
-new = '''    options.add("Move Overhead", Option(10, 0, 5000));
+anchor = '    options.add("Move Overhead", Option(10, 0, 5000));'
+
+insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
 
     options.add(
-      "SimpleLogics Tactical Extension",
-      Option(true, [](const Option&) {
-          return std::nullopt;
-      }));'''
+      "SimpleLogics Human Mode",
+      Option(true));
 
-if old not in s:
+    options.add(
+      "SimpleLogics Human Elo",
+      Option(2650, 2501, 2800));'''
+
+if anchor not in s:
     raise SystemExit("SimpleLogics patch failed: engine.cpp anchor not found")
 
-s = s.replace(old, new, 1)
+s = s.replace(anchor, insert, 1)
 engine.write_text(s)
 
 # ------------------------------------------------------------
-# 2. Add a real tactical search extension
+# 2. Connect Human Elo to Stockfish's existing Skill system
 # ------------------------------------------------------------
+
 search = src / "search.cpp"
 s = search.read_text()
 
-old = '''        // Step 17. Make the move
-        do_move(pos, move, st, givesCheck, ss);
+old1 = '''Skill skill =
+  Skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
 
-        // Add extension to new depth
-        newDepth += extension;'''
+new1 = '''Skill skill =
+  Skill(options["Skill Level"],
+        options["SimpleLogics Human Mode"]
+          ? int(options["SimpleLogics Human Elo"])
+          : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
 
-new = '''        // Step 17. Make the move
-        do_move(pos, move, st, givesCheck, ss);
+if old1 in s:
+    s = s.replace(old1, new1, 1)
 
-        // Add extension to new depth
-        newDepth += extension;
+old2 = '''Skill skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
 
-        // SimpleLogics tactical extension.
-        // Checks at meaningful search depths receive one additional ply.
-        // This is intentionally controlled by a real UCI option so it can
-        // be benchmarked against the unmodified Stockfish search.
-        if (options["SimpleLogics Tactical Extension"]
-            && givesCheck
-            && depth >= 5
-            && depth <= 14
-            && extension <= 0)
-            newDepth += 1;'''
+new2 = '''Skill skill(options["Skill Level"],
+             options["SimpleLogics Human Mode"]
+               ? int(options["SimpleLogics Human Elo"])
+               : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
 
-if old not in s:
-    raise SystemExit("SimpleLogics patch failed: search.cpp anchor not found")
+if old2 in s:
+    s = s.replace(old2, new2, 1)
 
-s = s.replace(old, new, 1)
+if old1 not in s and old2 not in s:
+    raise SystemExit("SimpleLogics patch failed: Skill anchor not found")
+
 search.write_text(s)
 
 # ------------------------------------------------------------
-# 3. Brand the engine as SimpleLogics
+# 3. Brand engine as SimpleLogics
 # ------------------------------------------------------------
+
 misc = src / "misc.cpp"
 s = misc.read_text()
 
-old = 'ss << "Stockfish " << version << std::setfill'
-new = 'ss << "SimpleLogics " << version << std::setfill'
-
-if old not in s:
-    raise SystemExit("SimpleLogics patch failed: misc.cpp anchor not found")
-
-s = s.replace(old, new, 1)
-misc.write_text(s)
-
-print("SimpleLogics source modifications applied successfully.")
-]=])
-
-add_custom_command(
-    OUTPUT "${SF_OUT}"
-
-    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SF_DIR}"
-
-    COMMAND git clone
-            --depth 1
-            --branch ${SF_TAG}
-            https://github.com/official-stockfish/Stockfish.git
-            "${SF_DIR}"
-
-    COMMAND python3
-            "${SIMPLELOGICS_PATCH}"
-            "${SF_SRC}"
-
-    COMMAND make -C "${SF_SRC}" -j2 net
-
-    COMMAND make -C "${SF_SRC}" -j2
-            build
-            ARCH=${SF_ARCH}
-            COMP=${SF_COMP}
-
-    COMMAND "${CMAKE_COMMAND}" -E copy
-            "${SF_SRC}/stockfish"
-            "${SF_OUT}"
-
-    VERBATIM
-)
-
-add_custom_target(SimpleLogics ALL
-    DEPENDS "${SF_OUT}"
-)
+old = 'ss << "Stockfish " << version <<
