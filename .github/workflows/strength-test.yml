@@ -10,8 +10,16 @@ jobs:
 
     steps:
 
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
+
       - name: Checkout SimpleLogics
         uses: actions/checkout@v4
+
+      # =====================================================
+      # INSTALL DEPENDENCIES
+      # =====================================================
 
       - name: Install dependencies
         run: |
@@ -20,7 +28,7 @@ jobs:
           python3 -m pip install --break-system-packages python-chess
 
       # =====================================================
-      # Build SimpleLogics
+      # BUILD SIMPLELOGICS
       # =====================================================
 
       - name: Build SimpleLogics
@@ -33,10 +41,11 @@ jobs:
           chmod +x build-test/SimpleLogics
 
           echo "===== SimpleLogics UCI ====="
+
           printf "uci\nquit\n" | build-test/SimpleLogics
 
       # =====================================================
-      # Build Stockfish baseline
+      # BUILD STOCKFISH BASELINE
       # =====================================================
 
       - name: Build Stockfish baseline
@@ -57,15 +66,18 @@ jobs:
           chmod +x stockfish-test/src/stockfish
 
           echo "===== Stockfish UCI ====="
+
           printf "uci\nquit\n" | stockfish-test/src/stockfish
 
       # =====================================================
-      # Run automatic tournament
+      # AUTOMATIC TOURNAMENT
       # =====================================================
 
       - name: Run automatic tournament
         run: |
+
           cat > strength_test.py <<'PYTHON'
+
           import chess
           import chess.engine
           import chess.pgn
@@ -73,46 +85,63 @@ jobs:
           import sys
           import random
 
-          SIMPLELOGICS = os.path.abspath("build-test/SimpleLogics")
-          STOCKFISH = os.path.abspath("stockfish-test/src/stockfish")
+
+          # =================================================
+          # SETTINGS
+          # =================================================
+
+          SIMPLELOGICS = os.path.abspath(
+              "build-test/SimpleLogics"
+          )
+
+          STOCKFISH = os.path.abspath(
+              "stockfish-test/src/stockfish"
+          )
 
           GAMES = 100
+
           NODES_PER_MOVE = 10000
+
           MAX_PLIES = 180
 
-          # -------------------------------------------------
-          # Generate a different opening for every game.
-          #
-          # The opening is generated deterministically from
-          # the game number so the test can be reproduced.
-          #
-          # We avoid captures/checks during the opening when
-          # possible, producing quieter starting positions.
-          # -------------------------------------------------
+
+          # =================================================
+          # GENERATE UNIQUE STARTING POSITION
+          # =================================================
 
           def generate_opening(game_number):
 
-              rng = random.Random(100000 + game_number)
+              rng = random.Random(
+                  100000 + game_number
+              )
 
               board = chess.Board()
 
+              opening = []
+
               for ply in range(8):
 
-                  legal_moves = list(board.legal_moves)
+                  legal_moves = list(
+                      board.legal_moves
+                  )
 
                   quiet_moves = []
 
                   for move in legal_moves:
 
+                      # Avoid captures during opening.
                       if board.is_capture(move):
                           continue
 
                       board.push(move)
 
-                      if not board.is_check():
-                          quiet_moves.append(move)
+                      # Avoid giving check.
+                      gives_check = board.is_check()
 
                       board.pop()
+
+                      if not gives_check:
+                          quiet_moves.append(move)
 
                   if quiet_moves:
                       moves = quiet_moves
@@ -120,147 +149,240 @@ jobs:
                       moves = legal_moves
 
                   # Prefer normal developing moves.
-                  preferred = []
+                  developing = []
 
                   for move in moves:
 
-                      piece = board.piece_at(move.from_square)
+                      piece = board.piece_at(
+                          move.from_square
+                      )
 
                       if piece is None:
                           continue
 
-                      # Avoid moving the same piece repeatedly
                       if piece.piece_type in (
                           chess.KNIGHT,
                           chess.BISHOP
                       ):
-                          preferred.append(move)
+                          developing.append(move)
 
-                  if preferred:
-                      moves = preferred
+                  if developing:
+                      moves = developing
 
                   move = rng.choice(moves)
 
+                  opening.append(move)
+
                   board.push(move)
 
-              return list(board.move_stack)
+              return opening
 
-          # -------------------------------------------------
-          # Engine configuration
-          # -------------------------------------------------
 
-          def configure_engine(engine, human_mode=False):
+          # =================================================
+          # CONFIGURE ENGINE
+          # =================================================
 
-              options = {
-                  "Threads": 1,
-                  "Hash": 128
-              }
+          def configure_engine(
+              engine,
+              human_mode=False
+          ):
 
-              if "SimpleLogics Human Mode" in engine.options:
-                  options["SimpleLogics Human Mode"] = human_mode
+              options = {}
 
-              if "SimpleLogics Human Elo" in engine.options:
-                  options["SimpleLogics Human Elo"] = 2650
+              if "Threads" in engine.options:
+                  options["Threads"] = 1
+
+              if "Hash" in engine.options:
+                  options["Hash"] = 128
+
+              if (
+                  "SimpleLogics Human Mode"
+                  in engine.options
+              ):
+                  options[
+                      "SimpleLogics Human Mode"
+                  ] = human_mode
+
+              if (
+                  "SimpleLogics Human Elo"
+                  in engine.options
+              ):
+                  options[
+                      "SimpleLogics Human Elo"
+                  ] = 2650
 
               if "Skill Level" in engine.options:
                   options["Skill Level"] = 20
 
               engine.configure(options)
 
-          # -------------------------------------------------
-          # Play one game
-          # -------------------------------------------------
 
-          def play_game(game_number, simple_white):
+          # =================================================
+          # PLAY ONE GAME
+          # =================================================
+
+          def play_game(
+              game_number,
+              simple_white
+          ):
 
               print("")
               print("=" * 60)
-              print(f"GAME {game_number}/{GAMES}")
+
+              print(
+                  f"GAME {game_number}/{GAMES}"
+              )
 
               if simple_white:
-                  print("SimpleLogics: WHITE")
+                  print(
+                      "SimpleLogics: WHITE"
+                  )
               else:
-                  print("SimpleLogics: BLACK")
+                  print(
+                      "SimpleLogics: BLACK"
+                  )
 
               print("=" * 60)
 
-              sl = chess.engine.SimpleEngine.popen_uci(SIMPLELOGICS)
-              sf = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
+              sl = None
+              sf = None
 
               try:
 
-                  # IMPORTANT:
-                  # Full-strength benchmark.
-                  configure_engine(sl, human_mode=False)
-                  configure_engine(sf, human_mode=False)
+                  # -----------------------------------------
+                  # START ENGINES
+                  # -----------------------------------------
 
-                  if "SimpleLogics Human Mode" in sl.options:
-                      print("SimpleLogics Human Mode: OFF")
+                  sl = (
+                      chess.engine
+                      .SimpleEngine
+                      .popen_uci(
+                          SIMPLELOGICS
+                      )
+                  )
 
-                  board = chess.Board()
+                  sf = (
+                      chess.engine
+                      .SimpleEngine
+                      .popen_uci(
+                          STOCKFISH
+                      )
+                  )
 
-                  # Generate a unique deterministic opening.
-                  opening = generate_opening(game_number)
+                  # -----------------------------------------
+                  # FULL STRENGTH
+                  # -----------------------------------------
 
-                  print("Opening:")
+                  configure_engine(
+                      sl,
+                      human_mode=False
+                  )
 
-                  for move in opening:
-                      print(board.san(move), end=" ")
+                  configure_engine(
+                      sf,
+                      human_mode=False
+                  )
 
-                  print("")
+                  print(
+                      "SimpleLogics Human Mode: OFF"
+                  )
 
-                  # Apply opening.
-                  for move in opening:
-                      if move not in board.legal_moves:
-                          raise RuntimeError(
-                              f"Illegal generated opening move: {move}"
-                          )
-
-                      board.push(move)
-
-                  # -------------------------------------------------
-                  # PGN
-                  # -------------------------------------------------
+                  # -----------------------------------------
+                  # CREATE PGN
+                  # -----------------------------------------
 
                   game = chess.pgn.Game()
 
-                  game.headers["Event"] = (
-                      "SimpleLogics Automatic Strength Test V2"
+                  game.headers[
+                      "Event"
+                  ] = (
+                      "SimpleLogics "
+                      "Automatic Strength Test V3"
                   )
 
-                  game.headers["Round"] = str(game_number)
+                  game.headers[
+                      "Round"
+                  ] = str(game_number)
 
-                  game.headers["White"] = (
+                  game.headers[
+                      "White"
+                  ] = (
                       "SimpleLogics"
                       if simple_white
                       else "Stockfish"
                   )
 
-                  game.headers["Black"] = (
+                  game.headers[
+                      "Black"
+                  ] = (
                       "Stockfish"
                       if simple_white
                       else "SimpleLogics"
                   )
 
+                  # -----------------------------------------
+                  # IMPORTANT:
+                  # The PGN board itself is used to apply
+                  # the opening exactly once.
+                  # -----------------------------------------
+
+                  board = game.board()
+
                   node = game
 
-                  for move in board.move_stack:
-                      node = node.add_variation(move)
+                  opening = generate_opening(
+                      game_number
+                  )
 
-                  ply = len(board.move_stack)
+                  print("Opening: ", end="")
 
-                  # -------------------------------------------------
-                  # Main game
-                  # -------------------------------------------------
+                  for move in opening:
+
+                      if move not in board.legal_moves:
+
+                          raise RuntimeError(
+                              "Generated illegal "
+                              f"opening move: {move}"
+                          )
+
+                      print(
+                          board.san(move),
+                          end=" "
+                      )
+
+                      node = (
+                          node.add_variation(
+                              move
+                          )
+                      )
+
+                      board.push(move)
+
+                  print("")
+
+                  # -----------------------------------------
+                  # PLAY MAIN GAME
+                  # -----------------------------------------
+
+                  ply = len(
+                      board.move_stack
+                  )
 
                   while (
-                      not board.is_game_over(claim_draw=True)
+                      not board.is_game_over(
+                          claim_draw=True
+                      )
                       and ply < MAX_PLIES
                   ):
 
-                      if (board.turn == chess.WHITE) == simple_white:
+                      if (
+                          board.turn == chess.WHITE
+                      ) == simple_white:
+
                           engine = sl
+
                       else:
+
                           engine = sf
 
                       result = engine.play(
@@ -275,108 +397,154 @@ jobs:
                       if move is None:
                           break
 
-                      board.push(move)
+                      # Make sure engine produced
+                      # a legal move.
+                      if move not in board.legal_moves:
 
-                      node = node.add_variation(move)
+                          raise RuntimeError(
+                              "Engine produced "
+                              f"illegal move: {move}"
+                          )
+
+                      node = (
+                          node.add_variation(
+                              move
+                          )
+                      )
+
+                      board.push(move)
 
                       ply += 1
 
-                  # -------------------------------------------------
-                  # Determine result
-                  # -------------------------------------------------
+                  # -----------------------------------------
+                  # RESULT
+                  # -----------------------------------------
 
                   if board.is_checkmate():
 
-                      result = (
-                          "1-0"
-                          if board.turn == chess.BLACK
-                          else "0-1"
-                      )
+                      if board.turn == chess.BLACK:
+                          result_text = "1-0"
+                      else:
+                          result_text = "0-1"
 
                   elif board.is_stalemate():
 
-                      result = "1/2-1/2"
+                      result_text = "1/2-1/2"
 
-                  elif board.is_insufficient_material():
+                  elif (
+                      board.is_insufficient_material()
+                  ):
 
-                      result = "1/2-1/2"
+                      result_text = "1/2-1/2"
 
                   elif board.can_claim_fifty_moves():
 
-                      result = "1/2-1/2"
+                      result_text = "1/2-1/2"
 
                   else:
 
-                      result = "1/2-1/2"
+                      result_text = "1/2-1/2"
 
-                  game.headers["Result"] = result
+                  game.headers[
+                      "Result"
+                  ] = result_text
 
-                  # -------------------------------------------------
-                  # Save PGN
-                  # -------------------------------------------------
+                  # -----------------------------------------
+                  # SAVE PGN
+                  # -----------------------------------------
 
                   with open(
                       "strength_test.pgn",
-                      "a"
+                      "a",
+                      encoding="utf-8"
                   ) as pgn_file:
 
-                      exporter = chess.pgn.FileExporter(
-                          pgn_file
+                      exporter = (
+                          chess.pgn.FileExporter(
+                              pgn_file
+                          )
                       )
 
-                      game.accept(exporter)
+                      game.accept(
+                          exporter
+                      )
 
-                  # -------------------------------------------------
-                  # Determine winner
-                  # -------------------------------------------------
+                  # -----------------------------------------
+                  # DETERMINE WINNER
+                  # -----------------------------------------
 
                   if simple_white:
 
-                      if result == "1-0":
+                      if result_text == "1-0":
+
                           winner = "SimpleLogics"
 
-                      elif result == "0-1":
+                      elif result_text == "0-1":
+
                           winner = "Stockfish"
 
                       else:
+
                           winner = "DRAW"
 
                   else:
 
-                      if result == "0-1":
+                      if result_text == "0-1":
+
                           winner = "SimpleLogics"
 
-                      elif result == "1-0":
+                      elif result_text == "1-0":
+
                           winner = "Stockfish"
 
                       else:
+
                           winner = "DRAW"
 
-                  print(f"RESULT: {result}")
-                  print(f"WINNER: {winner}")
-                  print(f"PLIES: {ply}")
+                  print(
+                      f"RESULT: {result_text}"
+                  )
+
+                  print(
+                      f"WINNER: {winner}"
+                  )
+
+                  print(
+                      f"PLIES: {ply}"
+                  )
 
                   return winner
 
               finally:
 
-                  sl.quit()
-                  sf.quit()
+                  if sl is not None:
+                      sl.quit()
 
-          # -------------------------------------------------
-          # Start tournament
-          # -------------------------------------------------
+                  if sf is not None:
+                      sf.quit()
+
+
+          # =================================================
+          # START TOURNAMENT
+          # =================================================
 
           open(
               "strength_test.pgn",
-              "w"
+              "w",
+              encoding="utf-8"
           ).close()
 
           wins = 0
+
           losses = 0
+
           draws = 0
 
-          for game_number in range(1, GAMES + 1):
+
+          for game_number in range(
+              1,
+              GAMES + 1
+          ):
 
               # Alternate colors.
               simple_white = (
@@ -391,12 +559,15 @@ jobs:
                   )
 
                   if result == "SimpleLogics":
+
                       wins += 1
 
                   elif result == "Stockfish":
+
                       losses += 1
 
                   else:
+
                       draws += 1
 
               except Exception as error:
@@ -405,27 +576,41 @@ jobs:
                   print("=" * 60)
                   print("TEST ERROR")
                   print("=" * 60)
-                  print(error)
+                  print(
+                      repr(error)
+                  )
 
                   sys.exit(1)
 
-          # -------------------------------------------------
-          # Final result
-          # -------------------------------------------------
+
+          # =================================================
+          # FINAL RESULT
+          # =================================================
 
           print("")
           print("=" * 60)
           print("FINAL RESULT")
           print("=" * 60)
 
-          print(f"Games:        {GAMES}")
-          print(f"SimpleLogics: {wins}")
-          print(f"Stockfish:    {losses}")
-          print(f"Draws:        {draws}")
+          print(
+              f"Games:        {GAMES}"
+          )
+
+          print(
+              f"SimpleLogics: {wins}"
+          )
+
+          print(
+              f"Stockfish:    {losses}"
+          )
+
+          print(
+              f"Draws:        {draws}"
+          )
 
           score = (
               wins +
-              (draws * 0.5)
+              draws * 0.5
           )
 
           percentage = (
@@ -450,13 +635,14 @@ jobs:
 
           python3 strength_test.py
 
+
       # =====================================================
-      # Upload PGN
+      # UPLOAD PGN
       # =====================================================
 
       - name: Upload tournament PGN
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-strength-test-v2-pgn
+          name: SimpleLogics-strength-test-v3-pgn
           path: strength_test.pgn
           if-no-files-found: error
