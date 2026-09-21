@@ -6,7 +6,7 @@ on:
 jobs:
   strength-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 20
 
     steps:
 
@@ -75,7 +75,7 @@ jobs:
           SIMPLELOGICS = os.path.abspath("build-test/SimpleLogics")
           STOCKFISH = os.path.abspath("stockfish-test/src/stockfish")
 
-          GAMES = 20
+          GAMES = 100
           NODES_PER_MOVE = 10000
           MAX_PLIES = 180
 
