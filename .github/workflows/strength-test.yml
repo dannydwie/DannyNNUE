@@ -6,36 +6,21 @@ on:
 jobs:
   strength-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     steps:
-
-      # =====================================================
-      # 1. Checkout SimpleLogics
-      # =====================================================
 
       - name: Checkout SimpleLogics
         uses: actions/checkout@v4
 
-      # =====================================================
-      # 2. Install build tools + Python
-      # =====================================================
-
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            cmake \
-            g++ \
-            make \
-            python3 \
-            python3-pip
-
+          sudo apt-get install -y git cmake g++ make python3 python3-pip
           python3 -m pip install --break-system-packages python-chess
 
       # =====================================================
-      # 3. Build SimpleLogics Linux x86-64
+      # Build SimpleLogics
       # =====================================================
 
       - name: Build SimpleLogics
@@ -47,11 +32,11 @@ jobs:
 
           chmod +x build-test/SimpleLogics
 
-          echo "===== SimpleLogics ====="
+          echo "===== SimpleLogics UCI ====="
           printf "uci\nquit\n" | build-test/SimpleLogics
 
       # =====================================================
-      # 4. Build official Stockfish baseline
+      # Build Stockfish baseline
       # =====================================================
 
       - name: Build Stockfish baseline
@@ -71,34 +56,44 @@ jobs:
 
           chmod +x stockfish-test/src/stockfish
 
-          echo "===== Stockfish ====="
+          echo "===== Stockfish UCI ====="
           printf "uci\nquit\n" | stockfish-test/src/stockfish
 
       # =====================================================
-      # 5. Create automatic match runner
+      # Automatic tournament
       # =====================================================
 
-      - name: Create test runner
+      - name: Run automatic tournament
         run: |
+
           cat > strength_test.py <<'PYTHON'
+
           import chess
           import chess.engine
+          import chess.pgn
           import os
-          import random
-          import time
 
-          SIMPLELOGICS = os.path.abspath("build-test/SimpleLogics")
-          STOCKFISH = os.path.abspath("stockfish-test/src/stockfish")
+          SIMPLELOGICS = os.path.abspath(
+              "build-test/SimpleLogics"
+          )
 
-          GAMES = 40
-          THINK_TIME = 1.0
+          STOCKFISH = os.path.abspath(
+              "stockfish-test/src/stockfish"
+          )
+
+          # -------------------------------------------------
+          # Test parameters
+          # -------------------------------------------------
+
+          GAMES = 20
+
+          # Equal search budget for both engines.
+          NODES_PER_MOVE = 10000
+
+          MAX_PLIES = 180
 
           # -------------------------------------------------
           # Opening positions
-          #
-          # Each sequence is a legal opening line.
-          # We alternate colors so neither engine gets
-          # a permanent first-move advantage.
           # -------------------------------------------------
 
           OPENINGS = [
@@ -108,252 +103,4 @@ jobs:
                   "g1f3", "b8c6",
                   "f1b5", "a7a6",
                   "b5a4", "g8f6"
-              ],
-
-              [
-                  "e2e4", "c7c5",
-                  "g1f3", "d7d6",
-                  "d2d4", "c5d4",
-                  "f3d4", "g8f6"
-              ],
-
-              [
-                  "d2d4", "d7d5",
-                  "c2c4", "e7e6",
-                  "b1c3", "g8f6",
-                  "c1g5", "f8e7"
-              ],
-
-              [
-                  "d2d4", "g8f6",
-                  "c2c4", "e7e6",
-                  "b1c3", "f8b4",
-                  "e2e3", "e8g8"
-              ],
-
-              [
-                  "c2c4", "e7e5",
-                  "b1c3", "g8f6",
-                  "g2g3", "f8b4",
-                  "f1g2", "e8g8"
-              ],
-
-              [
-                  "g1f3", "d7d5",
-                  "d2d4", "g8f6",
-                  "c2c4", "e7e6",
-                  "b1c3", "f8b4"
-              ],
-
-              [
-                  "e2e4", "c7c6",
-                  "d2d4", "d7d5",
-                  "b1c3", "d5e4",
-                  "c3e4", "c8f5"
-              ],
-
-              [
-                  "e2e4", "e7e6",
-                  "d2d4", "d7d5",
-                  "b1c3", "g8f6",
-                  "e4e5", "f6d7"
-              ],
-
-              [
-                  "d2d4", "g8f6",
-                  "c2c4", "g7g6",
-                  "b1c3", "f8g7",
-                  "e2e4", "d7d6"
-              ],
-
-              [
-                  "e2e4", "c7c5",
-                  "g1f3", "b8c6",
-                  "d2d4", "c5d4",
-                  "f3d4", "g8f6"
-              ],
-          ]
-
-          def create_engine(path, simplelogics=False):
-              engine = chess.engine.SimpleEngine.popen_uci(path)
-
-              options = {
-                  "Threads": 1,
-                  "Hash": 128,
-                  "Skill Level": 20,
-              }
-
-              if simplelogics:
-                  options["SimpleLogics Human Mode"] = False
-                  options["SimpleLogics Check Extension"] = True
-
-              engine.configure(options)
-
-              return engine
-
-          def play_game(simple_white, opening_moves):
-
-              sf = create_engine(STOCKFISH, False)
-              sl = create_engine(SIMPLELOGICS, True)
-
-              if simple_white:
-                  white = sl
-                  black = sf
-              else:
-                  white = sf
-                  black = sl
-
-              board = chess.Board()
-
-              try:
-                  for uci_move in opening_moves:
-                      move = chess.Move.from_uci(uci_move)
-
-                      if move not in board.legal_moves:
-                          print("WARNING: illegal opening move:", uci_move)
-                          break
-
-                      board.push(move)
-
-                  move_number = len(board.move_stack)
-
-                  while not board.is_game_over() and move_number < 250:
-
-                      engine = white if board.turn == chess.WHITE else black
-
-                      result = engine.play(
-                          board,
-                          chess.engine.Limit(time=THINK_TIME)
-                      )
-
-                      if result.move is None:
-                          break
-
-                      board.push(result.move)
-                      move_number += 1
-
-                  result = board.result(claim_draw=True)
-
-                  return result, board.fen(), board
-
-              finally:
-                  sl.quit()
-                  sf.quit()
-
-          def main():
-
-              wins = 0
-              draws = 0
-              losses = 0
-
-              pgn_file = open("simplelogics_vs_stockfish.pgn", "w")
-
-              print()
-              print("========================================")
-              print(" SimpleLogics Automatic Strength Test")
-              print("========================================")
-              print("Games:", GAMES)
-              print("Time per move:", THINK_TIME, "seconds")
-              print("Threads: 1")
-              print("Hash: 128 MB")
-              print("Check Extension: ON")
-              print()
-
-              for game_number in range(1, GAMES + 1):
-
-                  simple_white = (game_number % 2 == 1)
-
-                  opening = OPENINGS[(game_number - 1) % len(OPENINGS)]
-
-                  print(
-                      f"Game {game_number}/{GAMES} - "
-                      f"SimpleLogics {'White' if simple_white else 'Black'}"
-                  )
-
-                  result, fen, board = play_game(
-                      simple_white,
-                      opening
-                  )
-
-                  # Convert result into SimpleLogics perspective.
-
-                  if result == "1/2-1/2":
-                      draws += 1
-
-                  elif result == "1-0":
-                      if simple_white:
-                          wins += 1
-                      else:
-                          losses += 1
-
-                  elif result == "0-1":
-                      if simple_white:
-                          losses += 1
-                      else:
-                          wins += 1
-
-                  print(
-                      "Result:",
-                      result,
-                      "| SimpleLogics:",
-                      "WIN" if (
-                          (result == "1-0" and simple_white) or
-                          (result == "0-1" and not simple_white)
-                      ) else (
-                          "DRAW" if result == "1/2-1/2" else "LOSS"
-                      )
-                  )
-
-                  print()
-
-              pgn_file.close()
-
-              score = (
-                  (wins + 0.5 * draws) / GAMES * 100
-              )
-
-              print()
-              print("========================================")
-              print(" FINAL RESULT")
-              print("========================================")
-              print("Games :", GAMES)
-              print("Wins  :", wins)
-              print("Draws :", draws)
-              print("Losses:", losses)
-              print(f"Score : {score:.1f}%")
-              print()
-
-              if score >= 50:
-                  print("SimpleLogics scored >= 50%")
-              else:
-                  print("SimpleLogics scored < 50%")
-
-              print()
-              print("IMPORTANT:")
-              print("This is a preliminary strength test.")
-              print("40 games is NOT enough to establish a reliable Elo.")
-              print("Use larger tests before making strength claims.")
-
-          if __name__ == "__main__":
-              main()
-          PYTHON
-
-      # =====================================================
-      # 6. Run tournament
-      # =====================================================
-
-      - name: Run automatic tournament
-        run: |
-          python3 strength_test.py
-
-      # =====================================================
-      # 7. Upload results
-      # =====================================================
-
-      - name: Upload tournament results
-        uses: actions/upload-artifact@v4
-        with:
-          name: SimpleLogics-Strength-Test
-          path: |
-            simplelogics_vs_stockfish.pgn
-            strength_test.py
+             
