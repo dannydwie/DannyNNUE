@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(SimpleLogics LANGUAGES NONE)
 
-set(SF_TAG "sf_19" CACHE STRING "Stockfish release tag")
+set(SF_TAG "stockfish-dev-20260919-17a6c8f1" CACHE STRING "Stockfish development release tag")
 set(SF_DIR "${CMAKE_BINARY_DIR}/stockfish")
 set(SF_SRC "${SF_DIR}/src")
 set(SF_OUT "${CMAKE_BINARY_DIR}/SimpleLogics")
