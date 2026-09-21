@@ -131,7 +131,7 @@ jobs:
 
                   board = chess.Board()
 
-                  opening = OPENINGS[(game_number - 1) // 2]
+                  opening = OPENINGS[((game_number - 1) // 2) % len(OPENINGS)]
 
                   for move_uci in opening:
                       move = chess.Move.from_uci(move_uci)
