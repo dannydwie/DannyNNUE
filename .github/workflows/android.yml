@@ -25,25 +25,34 @@ jobs:
         with:
           packages: 'platform-tools'
 
-      - name: Install Android NDK
+      - name: Install Android NDK r27c
         run: |
           sdkmanager "ndk;27.2.12479018"
+
+      - name: Add Android NDK to PATH
+        run: |
+          echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Configure Android ARM64
         run: |
           cmake -S . -B build-android \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24
+            -DANDROID_PLATFORM=android-29
 
-      - name: Build
+      - name: Build SimpleLogics
         run: |
           cmake --build build-android --config Release -j2
 
-      - name: Upload Android engine
+      - name: Verify engine
+        run: |
+          file build-android/SimpleLogics
+          test -x build-android/SimpleLogics
+
+      - name: Upload SimpleLogics
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-android-arm64
+          name: SimpleLogics-SF19-android-arm64
           path: build-android/SimpleLogics
           if-no-files-found: error
