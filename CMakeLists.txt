@@ -15,10 +15,6 @@ else()
     set(SF_ARCH "x86-64")
 endif()
 
-# ------------------------------------------------------------
-# SimpleLogics source modifications
-# ------------------------------------------------------------
-
 set(SIMPLELOGICS_PATCH "${CMAKE_BINARY_DIR}/simplelogics_patch.py")
 
 file(WRITE "${SIMPLELOGICS_PATCH}" [=[
@@ -28,7 +24,7 @@ import sys
 src = Path(sys.argv[1])
 
 # ------------------------------------------------------------
-# 1. SimpleLogics Human Mode
+# 1. Add SimpleLogics Human Mode options
 # ------------------------------------------------------------
 
 engine = src / "engine.cpp"
@@ -53,36 +49,37 @@ s = s.replace(anchor, insert, 1)
 engine.write_text(s)
 
 # ------------------------------------------------------------
-# 2. Connect Human Elo to Stockfish's existing Skill system
+# 2. Connect Human Elo to Stockfish Skill system
 # ------------------------------------------------------------
 
 search = src / "search.cpp"
 s = search.read_text()
 
-old1 = '''Skill skill =
-  Skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
+old_main = '''    Skill   skill =
+      Skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
 
-new1 = '''Skill skill =
-  Skill(options["Skill Level"],
-        options["SimpleLogics Human Mode"]
-          ? int(options["SimpleLogics Human Elo"])
-          : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
+new_main = '''    Skill   skill =
+      Skill(options["Skill Level"],
+            options["SimpleLogics Human Mode"]
+              ? int(options["SimpleLogics Human Elo"])
+              : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
 
-if old1 in s:
-    s = s.replace(old1, new1, 1)
+if old_main not in s:
+    raise SystemExit("SimpleLogics patch failed: main Skill anchor not found")
 
-old2 = '''Skill skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
+s = s.replace(old_main, new_main, 1)
 
-new2 = '''Skill skill(options["Skill Level"],
-             options["SimpleLogics Human Mode"]
-               ? int(options["SimpleLogics Human Elo"])
-               : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
+old_iter = '''    Skill skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
 
-if old2 in s:
-    s = s.replace(old2, new2, 1)
+new_iter = '''    Skill skill(options["Skill Level"],
+                options["SimpleLogics Human Mode"]
+                  ? int(options["SimpleLogics Human Elo"])
+                  : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
 
-if old1 not in s and old2 not in s:
-    raise SystemExit("SimpleLogics patch failed: Skill anchor not found")
+if old_iter not in s:
+    raise SystemExit("SimpleLogics patch failed: iterative Skill anchor not found")
+
+s = s.replace(old_iter, new_iter, 1)
 
 search.write_text(s)
 
@@ -93,4 +90,47 @@ search.write_text(s)
 misc = src / "misc.cpp"
 s = misc.read_text()
 
-old = 'ss << "Stockfish " << version <<
+old = 'ss << "Stockfish " << version << std::setfill'
+new = 'ss << "SimpleLogics " << version << std::setfill'
+
+if old not in s:
+    raise SystemExit("SimpleLogics patch failed: misc.cpp anchor not found")
+
+s = s.replace(old, new, 1)
+misc.write_text(s)
+
+print("SimpleLogics Human Mode patch applied successfully.")
+]=])
+
+add_custom_command(
+    OUTPUT "${SF_OUT}"
+
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SF_DIR}"
+
+    COMMAND git clone
+            --depth 1
+            --branch ${SF_TAG}
+            https://github.com/official-stockfish/Stockfish.git
+            "${SF_DIR}"
+
+    COMMAND python3
+            "${SIMPLELOGICS_PATCH}"
+            "${SF_SRC}"
+
+    COMMAND make -C "${SF_SRC}" -j2 net
+
+    COMMAND make -C "${SF_SRC}" -j2
+            build
+            ARCH=${SF_ARCH}
+            COMP=${SF_COMP}
+
+    COMMAND "${CMAKE_COMMAND}" -E copy
+            "${SF_SRC}/stockfish"
+            "${SF_OUT}"
+
+    VERBATIM
+)
+
+add_custom_target(SimpleLogics ALL
+    DEPENDS "${SF_OUT}"
+)
