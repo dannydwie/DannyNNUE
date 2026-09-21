@@ -43,11 +43,13 @@ insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
       Option(2650, 2501, 2800));
 
     options.add(
-      "SimpleLogics Check Extension",
+      "SimpleLogics Recapture Extension",
       Option(true));'''
 
 if anchor not in s:
-    raise SystemExit("SimpleLogics patch failed: engine.cpp anchor not found")
+    raise SystemExit(
+        "SimpleLogics patch failed: engine.cpp anchor not found"
+    )
 
 s = s.replace(anchor, insert, 1)
 engine.write_text(s)
@@ -66,50 +68,76 @@ new_main = '''    Skill   skill =
       Skill(options["Skill Level"],
             options["SimpleLogics Human Mode"]
               ? int(options["SimpleLogics Human Elo"])
-              : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
+              : (options["UCI_LimitStrength"]
+                   ? int(options["UCI_Elo"])
+                   : 0));'''
 
 if old_main not in s:
-    raise SystemExit("SimpleLogics patch failed: main Skill anchor not found")
+    raise SystemExit(
+        "SimpleLogics patch failed: main Skill anchor not found"
+    )
 
 s = s.replace(old_main, new_main, 1)
 
 old_iter = '''    Skill skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
 
-new_iter = '''    Skill skill(options["Skill Level"],
-                options["SimpleLogics Human Mode"]
-                  ? int(options["SimpleLogics Human Elo"])
-                  : (options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0));'''
+new_iter = '''    Skill skill(
+      options["Skill Level"],
+      options["SimpleLogics Human Mode"]
+        ? int(options["SimpleLogics Human Elo"])
+        : (options["UCI_LimitStrength"]
+             ? int(options["UCI_Elo"])
+             : 0));'''
 
 if old_iter not in s:
-    raise SystemExit("SimpleLogics patch failed: iterative Skill anchor not found")
+    raise SystemExit(
+        "SimpleLogics patch failed: iterative Skill anchor not found"
+    )
 
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. SimpleLogics Adaptive Check Extension
+# 3. SimpleLogics Recapture Extension
 # ============================================================
 
-anchor_lmr = '''        int r = reduction(improving, depth, moveCount, delta);'''
+anchor = '''        givesCheck = pos.gives_check(move);
 
-insert_lmr = '''        int r = reduction(improving, depth, moveCount, delta);
+        // Calculate new depth for this move
+        newDepth = depth - 1;'''
 
-        // SimpleLogics Strength V1:
-        // Give checking moves slightly more search at shallow/mid depths.
+insert = '''        givesCheck = pos.gives_check(move);
+
+        // ====================================================
+        // SimpleLogics Strength V2
         //
-        // This is intentionally small and limited to depth <= 8.
-        // The goal is to improve tactical verification without
-        // causing uncontrolled search explosion.
-        if (options["SimpleLogics Check Extension"]
-            && givesCheck
-            && depth <= 8)
-            r -= 384;'''
+        // Recapture extension:
+        // If the current move captures on the square where
+        // the opponent just captured, search it one ply deeper.
+        //
+        // This focuses extra search on tactical exchanges
+        // without globally increasing the search depth.
+        // ====================================================
 
-if anchor_lmr not in s:
-    raise SystemExit("SimpleLogics patch failed: LMR anchor not found")
+        if (options["SimpleLogics Recapture Extension"]
+            && PvNode
+            && capture
+            && move.to_sq() == prevSq
+            && depth <= 12
+            && captureHistory[movedPiece][move.to_sq()]
+                                 [type_of(pos.piece_on(move.to_sq()))] > 3994)
+        {
+            extension = 1;
+        }
 
-s = s.replace(anchor_lmr, insert_lmr, 1)
+        // Calculate new depth for this move
+        newDepth = depth - 1;'''
 
-search.write_text(s)
+if anchor not in s:
+    raise SystemExit(
+        "SimpleLogics patch failed: recapture anchor not found"
+    )
+
+s = s.replace(anchor, insert, 1)
 
 # ============================================================
 # 4. Brand engine as SimpleLogics
@@ -122,12 +150,14 @@ old = 'ss << "Stockfish " << version << std::setfill'
 new = 'ss << "SimpleLogics " << version << std::setfill'
 
 if old not in s:
-    raise SystemExit("SimpleLogics patch failed: misc.cpp anchor not found")
+    raise SystemExit(
+        "SimpleLogics patch failed: misc.cpp anchor not found"
+    )
 
 s = s.replace(old, new, 1)
 misc.write_text(s)
 
-print("SimpleLogics Strength V1 patch applied successfully.")
+print("SimpleLogics Strength V2 patch applied successfully.")
 ]=])
 
 add_custom_command(
