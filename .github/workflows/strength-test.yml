@@ -60,47 +60,212 @@ jobs:
           printf "uci\nquit\n" | stockfish-test/src/stockfish
 
       # =====================================================
-      # Automatic tournament
+      # Run automatic tournament
       # =====================================================
 
       - name: Run automatic tournament
         run: |
-
           cat > strength_test.py <<'PYTHON'
-
           import chess
           import chess.engine
           import chess.pgn
           import os
+          import sys
 
-          SIMPLELOGICS = os.path.abspath(
-              "build-test/SimpleLogics"
-          )
-
-          STOCKFISH = os.path.abspath(
-              "stockfish-test/src/stockfish"
-          )
-
-          # -------------------------------------------------
-          # Test parameters
-          # -------------------------------------------------
+          SIMPLELOGICS = os.path.abspath("build-test/SimpleLogics")
+          STOCKFISH = os.path.abspath("stockfish-test/src/stockfish")
 
           GAMES = 20
-
-          # Equal search budget for both engines.
           NODES_PER_MOVE = 10000
-
           MAX_PLIES = 180
 
-          # -------------------------------------------------
-          # Opening positions
-          # -------------------------------------------------
-
           OPENINGS = [
+              ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"],
+              ["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"],
+              ["c2c4", "e7e5", "b1c3", "g8f6", "g2g3", "d7d5"],
+              ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4"],
+              ["e2e4", "e7e6", "d2d4", "d7d5", "b1c3", "g8f6"],
+              ["d2d4", "g8f6", "c2c4", "g7g6", "b1c3", "f8g7"],
+              ["e2e4", "c7c6", "d2d4", "d7d5", "b1c3", "d5e4"],
+              ["c2c4", "c7c5", "g1f3", "g8f6", "b1c3", "b8c6"],
+              ["g1f3", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"],
+              ["e2e4", "e7e5", "g1f3", "g8f6", "f3e5", "d7d6"]
+          ]
 
-              [
-                  "e2e4", "e7e5",
-                  "g1f3", "b8c6",
-                  "f1b5", "a7a6",
-                  "b5a4", "g8f6"
-             
+          def configure_engine(engine, human_mode=False):
+              options = {
+                  "Threads": 1,
+                  "Hash": 128
+              }
+
+              if "SimpleLogics Human Mode" in engine.options:
+                  options["SimpleLogics Human Mode"] = human_mode
+
+              if "SimpleLogics Human Elo" in engine.options:
+                  options["SimpleLogics Human Elo"] = 2650
+
+              if "Skill Level" in engine.options:
+                  options["Skill Level"] = 20
+
+              engine.configure(options)
+
+          def play_game(game_number, simple_white):
+              print("")
+              print("=" * 60)
+              print(f"GAME {game_number}/{GAMES}")
+              print("SimpleLogics: WHITE" if simple_white else "SimpleLogics: BLACK")
+              print("=" * 60)
+
+              sl = chess.engine.SimpleEngine.popen_uci(SIMPLELOGICS)
+              sf = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
+
+              try:
+                  # IMPORTANT:
+                  # Strength testing uses full-strength SimpleLogics.
+                  # Human Mode is explicitly disabled.
+                  configure_engine(sl, human_mode=False)
+                  configure_engine(sf, human_mode=False)
+
+                  if "SimpleLogics Human Mode" in sl.options:
+                      print("SimpleLogics Human Mode: OFF")
+
+                  board = chess.Board()
+
+                  opening = OPENINGS[(game_number - 1) // 2]
+
+                  for move_uci in opening:
+                      move = chess.Move.from_uci(move_uci)
+                      if move not in board.legal_moves:
+                          raise RuntimeError(
+                              f"Illegal opening move: {move_uci}"
+                          )
+                      board.push(move)
+
+                  game = chess.pgn.Game()
+                  game.headers["Event"] = "SimpleLogics Automatic Strength Test"
+                  game.headers["Round"] = str(game_number)
+                  game.headers["White"] = "SimpleLogics" if simple_white else "Stockfish"
+                  game.headers["Black"] = "Stockfish" if simple_white else "SimpleLogics"
+
+                  node = game
+                  for move in board.move_stack:
+                      node = node.add_variation(move)
+
+                  ply = len(board.move_stack)
+
+                  while not board.is_game_over(claim_draw=True) and ply < MAX_PLIES:
+                      if (board.turn == chess.WHITE) == simple_white:
+                          engine = sl
+                      else:
+                          engine = sf
+
+                      result = engine.play(
+                          board,
+                          chess.engine.Limit(nodes=NODES_PER_MOVE)
+                      )
+
+                      move = result.move
+
+                      if move is None:
+                          break
+
+                      board.push(move)
+                      node = node.add_variation(move)
+                      ply += 1
+
+                  if board.is_checkmate():
+                      result = "1-0" if board.turn == chess.BLACK else "0-1"
+                  elif board.is_stalemate():
+                      result = "1/2-1/2"
+                  elif board.is_insufficient_material():
+                      result = "1/2-1/2"
+                  elif board.can_claim_fifty_moves():
+                      result = "1/2-1/2"
+                  else:
+                      result = "1/2-1/2"
+
+                  game.headers["Result"] = result
+
+                  with open("strength_test.pgn", "a") as pgn_file:
+                      exporter = chess.pgn.FileExporter(pgn_file)
+                      game.accept(exporter)
+
+                  if simple_white:
+                      if result == "1-0":
+                          winner = "SimpleLogics"
+                      elif result == "0-1":
+                          winner = "Stockfish"
+                      else:
+                          winner = "DRAW"
+                  else:
+                      if result == "0-1":
+                          winner = "SimpleLogics"
+                      elif result == "1-0":
+                          winner = "Stockfish"
+                      else:
+                          winner = "DRAW"
+
+                  print(f"RESULT: {result}")
+                  print(f"WINNER: {winner}")
+                  print(f"PLIES: {ply}")
+
+                  return winner
+
+              finally:
+                  sl.quit()
+                  sf.quit()
+
+          open("strength_test.pgn", "w").close()
+
+          wins = 0
+          losses = 0
+          draws = 0
+
+          for game_number in range(1, GAMES + 1):
+              simple_white = (game_number % 2 == 1)
+
+              try:
+                  result = play_game(game_number, simple_white)
+
+                  if result == "SimpleLogics":
+                      wins += 1
+                  elif result == "Stockfish":
+                      losses += 1
+                  else:
+                      draws += 1
+
+              except Exception as error:
+                  print("")
+                  print("TEST ERROR")
+                  print(error)
+                  sys.exit(1)
+
+          print("")
+          print("=" * 60)
+          print("FINAL RESULT")
+          print("=" * 60)
+          print(f"Games:        {GAMES}")
+          print(f"SimpleLogics: {wins}")
+          print(f"Stockfish:    {losses}")
+          print(f"Draws:        {draws}")
+
+          score = wins + (draws * 0.5)
+          percentage = score / GAMES * 100
+
+          print(f"Score:        {score:.1f}/{GAMES}")
+          print(f"Score %:      {percentage:.1f}%")
+          print("=" * 60)
+          PYTHON
+
+          python3 strength_test.py
+
+      # =====================================================
+      # Upload PGN
+      # =====================================================
+
+      - name: Upload tournament PGN
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-strength-test-pgn
+          path: strength_test.pgn
+          if-no-files-found: error
