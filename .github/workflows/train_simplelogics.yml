@@ -1,0 +1,103 @@
+name: SimpleLogics NNUE Training Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  train:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout SimpleLogics
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            build-essential \
+            cmake \
+            python3 \
+            python3-pip
+
+      - name: Clone official NNUE trainer
+        run: |
+          git clone --depth 1 \
+            https://github.com/official-stockfish/nnue-pytorch.git \
+            nnue-pytorch
+
+      - name: Install Python dependencies
+        working-directory: nnue-pytorch
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: Compile NNUE data loader
+        working-directory: nnue-pytorch
+        run: |
+          chmod +x compile_data_loader.sh
+          ./compile_data_loader.sh
+
+      - name: Download test dataset
+        run: |
+          mkdir -p data
+
+          wget -L \
+            "https://huggingface.co/datasets/official-stockfish/master-smallnet-binpacks/resolve/main/test77-jan2022-2tb7p.high-simple-eval-1k.min-v2.binpack?download=true" \
+            -O data/test.binpack
+
+          ls -lh data/test.binpack
+
+      - name: Check trainer
+        working-directory: nnue-pytorch
+        run: |
+          python3 train.py --help
+
+      - name: Train SimpleLogics NNUE TEST
+        working-directory: nnue-pytorch
+        run: |
+
+          mkdir -p ../training-output
+
+          python3 train.py \
+            ../data/test.binpack \
+            --validation-datasets \
+            ../data/test.binpack \
+            --features="HalfKAv2_hm^" \
+            --accelerator=cpu \
+            --compile-backend=inductor \
+            --batch-size=256 \
+            --num-workers=1 \
+            --threads=2 \
+            --random-fen-skipping=3 \
+            --lambda=1.0 \
+            --max-epochs=1 \
+            --epoch-size=10000 \
+            --validation-size=1000 \
+            --network-save-period=1 \
+            --default-root-dir=../training-output
+
+      - name: Show training result
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "TRAINING RESULT"
+          echo "=============================================="
+
+          find training-output \
+            -maxdepth 6 \
+            -type f \
+            -print \
+            | sort
+
+      - name: Upload training result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-NNUE-training-test
+          path: training-output
+          if-no-files-found: warn
