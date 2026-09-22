@@ -3,10 +3,14 @@ name: SimpleLogics V5 Automatic Strength Test
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   strength-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
 
@@ -28,7 +32,56 @@ jobs:
           python3 -m pip install --break-system-packages python-chess
 
       # =====================================================
-      # BUILD SIMPLELOGICS V5
+      # GET LATEST SUCCESSFUL FINAL NNUE
+      # =====================================================
+
+      - name: Download latest FINAL NNUE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p nnue
+
+          RUN_ID=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/train_simplelogics.yml/runs?per_page=20" \
+            --jq '
+              .workflow_runs
+              | map(select(.status == "completed" and .conclusion == "success"))
+              | .[0].id
+            ')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful FINAL NNUE training run found."
+            exit 1
+          fi
+
+          echo "Latest successful FINAL NNUE run: $RUN_ID"
+
+          gh run download \
+            "$RUN_ID" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "SimpleLogics-Final-NNUE" \
+            --dir nnue
+
+          echo "Downloaded NNUE:"
+          ls -lh nnue/
+
+          if [ ! -f "nnue/SimpleLogics-final.nnue" ]; then
+            echo "ERROR: SimpleLogics-final.nnue not found."
+            exit 1
+          fi
+
+          mv \
+            nnue/SimpleLogics-final.nnue \
+            nnue/SimpleLogics-test.nnue
+
+          echo "Final NNUE prepared:"
+          ls -lh nnue/SimpleLogics-test.nnue
+
+          echo "SHA256:"
+          sha256sum nnue/SimpleLogics-test.nnue
+
+      # =====================================================
+      # BUILD SIMPLELOGICS
       # =====================================================
 
       - name: Build SimpleLogics V5
@@ -150,7 +203,6 @@ jobs:
                   else:
                       moves = legal_moves
 
-                  # Prefer normal development.
                   developing = []
 
                   for move in moves:
@@ -251,10 +303,6 @@ jobs:
 
               try:
 
-                  # -----------------------------------------
-                  # START ENGINES
-                  # -----------------------------------------
-
                   sl = (
                       chess.engine
                       .SimpleEngine
@@ -271,10 +319,6 @@ jobs:
                       )
                   )
 
-                  # -----------------------------------------
-                  # FULL STRENGTH
-                  # -----------------------------------------
-
                   configure_engine(
                       sl,
                       human_mode=False
@@ -288,10 +332,6 @@ jobs:
                   print(
                       "SimpleLogics Human Mode: OFF"
                   )
-
-                  # -----------------------------------------
-                  # CREATE PGN
-                  # -----------------------------------------
 
                   game = chess.pgn.Game()
 
@@ -321,10 +361,6 @@ jobs:
                       if simple_white
                       else "SimpleLogics V5"
                   )
-
-                  # -----------------------------------------
-                  # APPLY OPENING ONCE
-                  # -----------------------------------------
 
                   board = game.board()
 
@@ -359,10 +395,6 @@ jobs:
                       board.push(move)
 
                   print("")
-
-                  # -----------------------------------------
-                  # PLAY MAIN GAME
-                  # -----------------------------------------
 
                   ply = len(
                       board.move_stack
@@ -414,10 +446,6 @@ jobs:
 
                       ply += 1
 
-                  # -----------------------------------------
-                  # RESULT
-                  # -----------------------------------------
-
                   if board.is_checkmate():
 
                       if board.turn == chess.BLACK:
@@ -447,10 +475,6 @@ jobs:
                       "Result"
                   ] = result_text
 
-                  # -----------------------------------------
-                  # SAVE PGN
-                  # -----------------------------------------
-
                   with open(
                       "strength_test.pgn",
                       "a",
@@ -466,10 +490,6 @@ jobs:
                       game.accept(
                           exporter
                       )
-
-                  # -----------------------------------------
-                  # DETERMINE WINNER
-                  # -----------------------------------------
 
                   if simple_white:
 
@@ -536,7 +556,6 @@ jobs:
               GAMES + 1
           ):
 
-              # Alternate colors.
               simple_white = (
                   game_number % 2 == 1
               )
