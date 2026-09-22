@@ -1,0 +1,181 @@
+name: SimpleLogics NNUE Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      train_data:
+        description: "Path training .binpack"
+        required: true
+        default: "/data/train.binpack"
+        type: string
+
+      validation_data:
+        description: "Path validation .binpack"
+        required: true
+        default: "/data/validation.binpack"
+        type: string
+
+      epochs:
+        description: "Maximum training epochs"
+        required: true
+        default: "5"
+        type: string
+
+      epoch_size:
+        description: "Positions per epoch"
+        required: true
+        default: "1000000"
+        type: string
+
+
+jobs:
+
+  train:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout SimpleLogics
+        uses: actions/checkout@v4
+
+
+      - name: Install dependencies
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            git \
+            cmake \
+            build-essential \
+            python3 \
+            python3-pip
+
+
+      - name: Clone official NNUE trainer
+        run: |
+
+          git clone --depth 1 \
+            https://github.com/official-stockfish/nnue-pytorch.git \
+            nnue-pytorch
+
+
+      - name: Install Python packages
+        working-directory: nnue-pytorch
+        run: |
+
+          python3 -m pip install --upgrade pip
+
+          python3 -m pip install \
+            -r requirements.txt
+
+
+      - name: Show trainer information
+        working-directory: nnue-pytorch
+        run: |
+
+          echo "=============================================="
+          echo "OFFICIAL STOCKFISH NNUE TRAINER"
+          echo "=============================================="
+
+          git log -1 --oneline
+
+          python3 --version
+
+
+      - name: Check training data
+        run: |
+
+          echo "=============================================="
+          echo "CHECK DATASET"
+          echo "=============================================="
+
+          echo "Training:"
+          echo "${{ inputs.train_data }}"
+
+          echo ""
+
+          echo "Validation:"
+          echo "${{ inputs.validation_data }}"
+
+          echo ""
+
+          if [ ! -f "${{ inputs.train_data }}" ]; then
+            echo ""
+            echo "ERROR: training dataset tidak ditemukan."
+            echo ""
+            echo "Workflow dihentikan."
+            echo "Jangan membuat dataset palsu."
+            exit 1
+          fi
+
+          if [ ! -f "${{ inputs.validation_data }}" ]; then
+            echo ""
+            echo "ERROR: validation dataset tidak ditemukan."
+            echo ""
+            echo "Workflow dihentikan."
+            exit 1
+          fi
+
+
+      - name: Compile NNUE data loader
+        working-directory: nnue-pytorch
+        run: |
+
+          ./compile_data_loader.sh
+
+
+      - name: Check trainer arguments
+        working-directory: nnue-pytorch
+        run: |
+
+          python3 train.py --help
+
+
+      - name: Start SimpleLogics training
+        working-directory: nnue-pytorch
+        run: |
+
+          mkdir -p ../training-output
+
+          python3 train.py \
+            "${{ inputs.train_data }}" \
+            --validation-datasets \
+            "${{ inputs.validation_data }}" \
+            --features="HalfKAv2_hm^" \
+            --accelerator=cpu \
+            --batch-size=1024 \
+            --num-workers=1 \
+            --threads=2 \
+            --random-fen-skipping=3 \
+            --lambda=1.0 \
+            --max-epochs="${{ inputs.epochs }}" \
+            --epoch-size="${{ inputs.epoch_size }}" \
+            --validation-size=100000 \
+            --network-save-period=1 \
+            --default-root-dir=../training-output
+
+
+      - name: List training results
+        if: always()
+        run: |
+
+          echo "=============================================="
+          echo "TRAINING OUTPUT"
+          echo "=============================================="
+
+          find training-output \
+            -maxdepth 5 \
+            -type f \
+            -print \
+            | sort
+
+
+      - name: Upload training results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-NNUE-training
+          path: training-output
+          if-no-files-found: warn
