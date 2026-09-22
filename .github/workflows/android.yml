@@ -28,7 +28,7 @@ jobs:
           path: nnue
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          run-id: 35690157118
+          run-id: 35691167655
 
       - name: Verify NNUE
         run: |
