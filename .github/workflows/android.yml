@@ -21,23 +21,56 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Download SimpleLogics NNUE
-        uses: actions/download-artifact@v5
-        with:
-          name: SimpleLogics-NNUE-test
-          path: nnue
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          run-id: 35691167655
-
-      - name: Verify NNUE
+      - name: Find latest successful FINAL NNUE training
+        id: final_nnue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          RUN_ID=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/train_simplelogics.yml/runs?per_page=20" \
+            --jq '
+              .workflow_runs
+              | map(select(.status == "completed" and .conclusion == "success"))
+              | .[0].id
+            ')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful FINAL NNUE training run found."
+            exit 1
+          fi
+
+          echo "Latest successful FINAL NNUE run: $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download FINAL NNUE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p nnue
+
+          gh run download \
+            "${{ steps.final_nnue.outputs.run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "SimpleLogics-Final-NNUE" \
+            --dir nnue
+
           echo "=============================================="
-          echo "SIMPLELOGICS NNUE"
+          echo "SIMPLELOGICS FINAL NNUE"
           echo "=============================================="
+
           ls -lh nnue/
-          file nnue/SimpleLogics-test.nnue
-          du -h nnue/SimpleLogics-test.nnue
+          file nnue/SimpleLogics-final.nnue
+          du -h nnue/SimpleLogics-final.nnue
+
+      - name: Prepare NNUE for Stockfish build
+        run: |
+          mv \
+            nnue/SimpleLogics-final.nnue \
+            nnue/SimpleLogics-test.nnue
+
+          echo "NNUE selected for build:"
+          ls -lh nnue/SimpleLogics-test.nnue
+          sha256sum nnue/SimpleLogics-test.nnue
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -75,9 +108,10 @@ jobs:
           file build-android/SimpleLogics
           test -x build-android/SimpleLogics
 
-      - name: Upload SimpleLogics
+      - name: Upload SimpleLogics FINAL Android
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-Android-NNUE-test
+          name: SimpleLogics-Android-Final
           path: build-android/SimpleLogics
           if-no-files-found: error
+          retention-days: 30
