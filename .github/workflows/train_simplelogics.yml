@@ -81,7 +81,7 @@ jobs:
             ../data/train.binpack \
             --validation-datasets \
             ../data/validation.binpack \
-            --features="HalfKAv2_hm^" \
+            --features="Full_Threats+PP_3Wide+HalfKAv2_hm^" \
             --accelerator=cpu \
             --compile-backend=inductor \
             --batch-size=1024 \
@@ -139,7 +139,7 @@ jobs:
           python3 serialize.py \
             "$CKPT" \
             ../SimpleLogics-final.nnue \
-            --features="HalfKAv2_hm^"
+            --features="Full_Threats+PP_3Wide+HalfKAv2_hm^" \
             
       - name: Verify FINAL NNUE
         run: |
