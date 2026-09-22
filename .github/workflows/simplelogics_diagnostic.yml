@@ -1,0 +1,243 @@
+name: SimpleLogics UCI Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+
+      - name: Checkout SimpleLogics
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            build-essential \
+            cmake \
+            python3
+
+      - name: Find latest successful FINAL NNUE
+        id: final_nnue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/train_simplelogics.yml/runs?per_page=20" \
+            --jq '
+              .workflow_runs
+              | map(select(.status == "completed" and .conclusion == "success"))
+              | .[0].id
+            ')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful FINAL NNUE training run found."
+            exit 1
+          fi
+
+          echo "Latest successful FINAL NNUE run: $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download FINAL NNUE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p nnue
+
+          gh run download \
+            "${{ steps.final_nnue.outputs.run_id }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "SimpleLogics-Final-NNUE" \
+            --dir nnue
+
+          echo "=============================================="
+          echo "FINAL NNUE"
+          echo "=============================================="
+
+          ls -lh nnue/
+          sha256sum nnue/SimpleLogics-final.nnue
+
+      - name: Prepare NNUE
+        run: |
+          mv \
+            nnue/SimpleLogics-final.nnue \
+            nnue/SimpleLogics-test.nnue
+
+          echo "Prepared NNUE:"
+          ls -lh nnue/SimpleLogics-test.nnue
+
+          echo ""
+          echo "SHA256:"
+          sha256sum nnue/SimpleLogics-test.nnue
+
+      - name: Configure diagnostic build
+        run: |
+          cmake -S . -B build-diagnostic \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build SimpleLogics
+        run: |
+          cmake --build build-diagnostic --config Release -j2
+
+      - name: Verify binary
+        run: |
+          file build-diagnostic/SimpleLogics
+          test -x build-diagnostic/SimpleLogics
+
+      - name: Run UCI diagnostic
+        run: |
+          python3 <<'PY'
+          import subprocess
+          import select
+          import sys
+          import time
+
+          binary = "./build-diagnostic/SimpleLogics"
+
+          print("==============================================")
+          print("SIMPLELOGICS UCI DIAGNOSTIC")
+          print("==============================================")
+          print("Binary:", binary)
+          print("")
+
+          p = subprocess.Popen(
+              [binary],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+              bufsize=1
+          )
+
+          def send(command):
+              print(">>>", command)
+              p.stdin.write(command + "\n")
+              p.stdin.flush()
+
+          send("uci")
+
+          uci_ok = False
+          start = time.time()
+
+          while time.time() - start < 10:
+              ready, _, _ = select.select([p.stdout], [], [], 0.5)
+
+              if ready:
+                  line = p.stdout.readline()
+
+                  if not line:
+                      break
+
+                  line = line.rstrip()
+                  print(line)
+
+                  if line == "uciok":
+                      uci_ok = True
+                      break
+
+          if not uci_ok:
+              print("")
+              print("ERROR: Engine did not return uciok.")
+              p.kill()
+              sys.exit(1)
+
+          send("setoption name SimpleLogics Human Mode value false")
+          send("setoption name SimpleLogics LMR Boost value false")
+          send("isready")
+
+          ready_ok = False
+          start = time.time()
+
+          while time.time() - start < 10:
+              ready, _, _ = select.select([p.stdout], [], [], 0.5)
+
+              if ready:
+                  line = p.stdout.readline()
+
+                  if not line:
+                      break
+
+                  line = line.rstrip()
+                  print(line)
+
+                  if line == "readyok":
+                      ready_ok = True
+                      break
+
+          if not ready_ok:
+              print("")
+              print("ERROR: Engine did not return readyok.")
+              p.kill()
+              sys.exit(1)
+
+          send("position startpos")
+          send("go depth 8")
+
+          print("")
+          print("Waiting for search output...")
+          print("")
+
+          bestmove = False
+          start = time.time()
+
+          while time.time() - start < 30:
+              ready, _, _ = select.select([p.stdout], [], [], 0.5)
+
+              if ready:
+                  line = p.stdout.readline()
+
+                  if not line:
+                      print("ERROR: Engine process terminated.")
+                      break
+
+                  line = line.rstrip()
+                  print(line)
+
+                  if line.startswith("bestmove "):
+                      bestmove = True
+                      break
+
+          if bestmove:
+              print("")
+              print("==============================================")
+              print("UCI DIAGNOSTIC PASSED")
+              print("==============================================")
+              print("SimpleLogics returned bestmove successfully.")
+              print("")
+
+              try:
+                  p.stdin.write("quit\n")
+                  p.stdin.flush()
+              except:
+                  pass
+
+              p.wait(timeout=5)
+              sys.exit(0)
+
+          print("")
+          print("==============================================")
+          print("UCI DIAGNOSTIC FAILED")
+          print("==============================================")
+          print("No bestmove was returned within 30 seconds.")
+
+          if p.poll() is None:
+              p.kill()
+
+          sys.exit(1)
+          PY
+
+      - name: Diagnostic summary
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "SIMPLELOGICS DIAGNOSTIC COMPLETE"
+          echo "=============================================="
