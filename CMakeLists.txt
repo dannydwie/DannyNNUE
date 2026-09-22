@@ -7,17 +7,6 @@ set(SF_DIR "${CMAKE_BINARY_DIR}/stockfish")
 set(SF_SRC "${SF_DIR}/src")
 set(SF_OUT "${CMAKE_BINARY_DIR}/SimpleLogics")
 
-# ============================================================
-# SimpleLogics NNUE
-#
-# The Android workflow downloads:
-#   nnue/SimpleLogics-test.nnue
-#
-# This file is copied over the Stockfish default NNUE before
-# the Stockfish build, causing the custom network to be
-# embedded into the SimpleLogics binary.
-# ============================================================
-
 set(SIMPLELOGICS_NNUE
     "${CMAKE_SOURCE_DIR}/nnue/SimpleLogics-test.nnue")
 
@@ -29,19 +18,90 @@ else()
     set(SF_ARCH "x86-64")
 endif()
 
-set(SIMPLELOGICS_PATCH "${CMAKE_BINARY_DIR}/simplelogics_patch.py")
+set(SIMPLELOGICS_BUILD_SCRIPT
+    "${CMAKE_BINARY_DIR}/build_simplelogics.py")
 
-file(WRITE "${SIMPLELOGICS_PATCH}" [=[
+file(WRITE "${SIMPLELOGICS_BUILD_SCRIPT}" [=[
 from pathlib import Path
+import hashlib
+import shutil
+import subprocess
 import sys
 
-src = Path(sys.argv[1])
+ROOT = Path(sys.argv[1])
+SF_DIR = Path(sys.argv[2])
+SF_SRC = Path(sys.argv[3])
+SF_OUT = Path(sys.argv[4])
+NNUE_SOURCE = Path(sys.argv[5])
+SF_TAG = sys.argv[6]
+SF_ARCH = sys.argv[7]
+SF_COMP = sys.argv[8]
+
+print("==============================================")
+print("SIMPLELOGICS BUILD")
+print("==============================================")
+print("Stockfish tag:", SF_TAG)
+print("NNUE source:", NNUE_SOURCE)
+print("")
 
 # ============================================================
-# 1. SimpleLogics UCI OPTIONS
+# 1. CHECK CUSTOM NNUE
 # ============================================================
 
-engine = src / "engine.cpp"
+if not NNUE_SOURCE.is_file():
+    raise SystemExit(
+        f"ERROR: Custom NNUE not found: {NNUE_SOURCE}"
+    )
+
+size = NNUE_SOURCE.stat().st_size
+
+if size < 1_000_000:
+    raise SystemExit(
+        f"ERROR: NNUE file is unexpectedly small: {size} bytes"
+    )
+
+sha256 = hashlib.sha256(
+    NNUE_SOURCE.read_bytes()
+).hexdigest()
+
+network_name = f"nn-{sha256[:12]}.nnue"
+
+print("Custom NNUE size :", size)
+print("Custom NNUE SHA256:", sha256)
+print("Stockfish NNUE name:", network_name)
+print("")
+
+# ============================================================
+# 2. CLONE STOCKFISH
+# ============================================================
+
+if SF_DIR.exists():
+    shutil.rmtree(SF_DIR)
+
+subprocess.run(
+    [
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        SF_TAG,
+        "https://github.com/official-stockfish/Stockfish.git",
+        str(SF_DIR),
+    ],
+    check=True,
+)
+
+if not SF_SRC.is_dir():
+    raise SystemExit(
+        f"ERROR: Stockfish source directory not found: {SF_SRC}"
+    )
+
+# ============================================================
+# 3. SIMPLELOGICS UCI OPTIONS
+# ============================================================
+
+engine = SF_SRC / "engine.cpp"
 s = engine.read_text()
 
 anchor = '    options.add("Move Overhead", Option(10, 0, 5000));'
@@ -62,17 +122,17 @@ insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V5 patch failed: engine.cpp anchor not found"
+        "ERROR: engine.cpp anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
 engine.write_text(s)
 
 # ============================================================
-# 2. HUMAN MODE CONNECTION
+# 4. HUMAN MODE
 # ============================================================
 
-search = src / "search.cpp"
+search = SF_SRC / "search.cpp"
 s = search.read_text()
 
 old_main = '''    Skill   skill =
@@ -88,7 +148,7 @@ new_main = '''    Skill   skill =
 
 if old_main not in s:
     raise SystemExit(
-        "SimpleLogics V5 patch failed: main Skill anchor not found"
+        "ERROR: main Skill anchor not found"
     )
 
 s = s.replace(old_main, new_main, 1)
@@ -105,13 +165,13 @@ new_iter = '''    Skill skill(
 
 if old_iter not in s:
     raise SystemExit(
-        "SimpleLogics V5 patch failed: iterative Skill anchor not found"
+        "ERROR: iterative Skill anchor not found"
     )
 
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. SIMPLELOGICS V5 LMR BOOST
+# 5. SIMPLELOGICS LMR BOOST
 # ============================================================
 
 anchor = '''        int r = reduction(improving, depth, moveCount, delta);
@@ -122,8 +182,6 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
 
         // ====================================================
         // SimpleLogics Strength V5
-        //
-        // Controlled LMR reduction.
         // ====================================================
 
         if (options["SimpleLogics LMR Boost"]
@@ -140,17 +198,17 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V5 patch failed: LMR anchor not found"
+        "ERROR: LMR anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
 search.write_text(s)
 
 # ============================================================
-# 4. BRAND ENGINE AS SIMPLELOGICS
+# 6. BRANDING
 # ============================================================
 
-misc = src / "misc.cpp"
+misc = SF_SRC / "misc.cpp"
 s = misc.read_text()
 
 old = 'ss << "Stockfish " << version << std::setfill'
@@ -158,57 +216,164 @@ new = 'ss << "SimpleLogics " << version << std::setfill'
 
 if old not in s:
     raise SystemExit(
-        "SimpleLogics V5 patch failed: misc.cpp anchor not found"
+        "ERROR: misc.cpp branding anchor not found"
     )
 
 s = s.replace(old, new, 1)
 misc.write_text(s)
 
-print("SimpleLogics Strength V5 patch applied successfully.")
+# ============================================================
+# 7. INSTALL CUSTOM NNUE WITH CORRECT SHA256 NAME
+# ============================================================
+
+network_path = SF_SRC / network_name
+
+shutil.copy2(
+    NNUE_SOURCE,
+    network_path
+)
+
+print("")
+print("Custom NNUE installed:")
+print(network_path)
+print("")
+
+# Verify filename matches SHA256
+installed_sha256 = hashlib.sha256(
+    network_path.read_bytes()
+).hexdigest()
+
+if installed_sha256[:12] != sha256[:12]:
+    raise SystemExit(
+        "ERROR: Installed NNUE SHA256 mismatch"
+    )
+
+# ============================================================
+# 8. PATCH STOCKFISH DEFAULT NETWORK
+# ============================================================
+
+evaluate = SF_SRC / "evaluate.h"
+s = evaluate.read_text()
+
+old_default = None
+
+for line in s.splitlines():
+    if "#define EvalFileDefaultName" in line:
+        old_default = line
+        break
+
+if old_default is None:
+    raise SystemExit(
+        "ERROR: EvalFileDefaultName not found in evaluate.h"
+    )
+
+new_default = (
+    f'#define EvalFileDefaultName "{network_name}"'
+)
+
+s = s.replace(
+    old_default,
+    new_default,
+    1
+)
+
+evaluate.write_text(s)
+
+print("Stockfish default NNUE patched:")
+print(new_default)
+print("")
+
+# ============================================================
+# 9. BUILD STOCKFISH
+# ============================================================
+
+print("==============================================")
+print("BUILDING SIMPLELOGICS")
+print("==============================================")
+print("")
+
+subprocess.run(
+    [
+        "make",
+        "-C",
+        str(SF_SRC),
+        "-j2",
+        "build",
+        f"ARCH={SF_ARCH}",
+        f"COMP={SF_COMP}",
+    ],
+    check=True,
+)
+
+# ============================================================
+# 10. VERIFY NNUE WAS NOT REPLACED
+# ============================================================
+
+final_network = SF_SRC / network_name
+
+if not final_network.is_file():
+    raise SystemExit(
+        "ERROR: Custom NNUE disappeared during build."
+    )
+
+final_sha256 = hashlib.sha256(
+    final_network.read_bytes()
+).hexdigest()
+
+print("")
+print("==============================================")
+print("FINAL NNUE VERIFICATION")
+print("==============================================")
+print("Network:", final_network.name)
+print("SHA256 :", final_sha256)
+print("")
+
+if final_sha256[:12] != final_network.name[3:15]:
+    raise SystemExit(
+        "ERROR: Final NNUE filename does not match SHA256."
+    )
+
+print("FINAL NNUE SHA256 verification PASSED.")
+print("")
+
+# ============================================================
+# 11. COPY ENGINE
+# ============================================================
+
+stockfish_binary = SF_SRC / "stockfish"
+
+if not stockfish_binary.is_file():
+    raise SystemExit(
+        "ERROR: Stockfish binary was not produced."
+    )
+
+shutil.copy2(
+    stockfish_binary,
+    SF_OUT
+)
+
+print("SimpleLogics binary:")
+print(SF_OUT)
+print("")
+
+print("==============================================")
+print("SIMPLELOGICS BUILD SUCCESS")
+print("==============================================")
 ]=])
 
 add_custom_command(
     OUTPUT "${SF_OUT}"
 
-    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SF_DIR}"
-
-    COMMAND git clone
-            --depth 1
-            --branch ${SF_TAG}
-            https://github.com/official-stockfish/Stockfish.git
-            "${SF_DIR}"
-
     COMMAND python3
-            "${SIMPLELOGICS_PATCH}"
+            "${SIMPLELOGICS_BUILD_SCRIPT}"
+            "${CMAKE_SOURCE_DIR}"
+            "${SF_DIR}"
             "${SF_SRC}"
-
-    # Download the normal Stockfish network first so the build
-    # system has the expected NNUE filename available.
-    COMMAND make -C "${SF_SRC}" -j2 net
-
-    # Replace the Stockfish network with the SimpleLogics
-    # trained NNUE before compiling the engine.
-    COMMAND "${CMAKE_COMMAND}" -E copy
-            "${SIMPLELOGICS_NNUE}"
-            "${SF_SRC}/nn-134a887f4c8f.nnue"
-
-    # Verify that the custom network was copied successfully.
-    COMMAND "${CMAKE_COMMAND}" -E echo
-            "SimpleLogics NNUE installed:"
-            "${SF_SRC}/nn-134a887f4c8f.nnue"
-
-    COMMAND test
-            -s
-            "${SF_SRC}/nn-134a887f4c8f.nnue"
-
-    COMMAND make -C "${SF_SRC}" -j2
-            build
-            ARCH=${SF_ARCH}
-            COMP=${SF_COMP}
-
-    COMMAND "${CMAKE_COMMAND}" -E copy
-            "${SF_SRC}/stockfish"
             "${SF_OUT}"
+            "${SIMPLELOGICS_NNUE}"
+            "${SF_TAG}"
+            "${SF_ARCH}"
+            "${SF_COMP}"
 
     VERBATIM
 )
