@@ -44,15 +44,11 @@ insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
 
     options.add(
       "SimpleLogics Recapture Extension",
-      Option(true));
-
-    options.add(
-      "SimpleLogics Quiet Extension",
       Option(true));'''
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V3 patch failed: engine.cpp anchor not found"
+        "SimpleLogics V4 patch failed: engine.cpp anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
@@ -78,7 +74,7 @@ new_main = '''    Skill   skill =
 
 if old_main not in s:
     raise SystemExit(
-        "SimpleLogics V3 patch failed: main Skill anchor not found"
+        "SimpleLogics V4 patch failed: main Skill anchor not found"
     )
 
 s = s.replace(old_main, new_main, 1)
@@ -95,13 +91,25 @@ new_iter = '''    Skill skill(
 
 if old_iter not in s:
     raise SystemExit(
-        "SimpleLogics V3 patch failed: iterative Skill anchor not found"
+        "SimpleLogics V4 patch failed: iterative Skill anchor not found"
     )
 
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. V2 Recapture Extension
+# 3. SimpleLogics Strength V4
+#
+# Recapture extension tuning.
+#
+# V2 baseline:
+#   depth <= 12
+#   captureHistory > 3994
+#
+# V4 experiment:
+#   depth <= 16
+#   captureHistory > 3000
+#
+# Everything else remains unchanged.
 # ============================================================
 
 anchor = '''        givesCheck = pos.gives_check(move);
@@ -112,39 +120,26 @@ anchor = '''        givesCheck = pos.gives_check(move);
 insert = '''        givesCheck = pos.gives_check(move);
 
         // ====================================================
-        // SimpleLogics Strength V2
-        // Recapture extension.
+        // SimpleLogics Strength V4
+        //
+        // Slightly broader recapture extension.
+        //
+        // The extension is still restricted to:
+        //   - PV nodes
+        //   - captures
+        //   - recaptures on the previous destination square
+        //
+        // Compared with V2, only the depth limit and
+        // capture-history threshold are changed.
         // ====================================================
 
         if (options["SimpleLogics Recapture Extension"]
             && PvNode
             && capture
             && move.to_sq() == prevSq
-            && depth <= 12
+            && depth <= 16
             && captureHistory[movedPiece][move.to_sq()]
-                                 [type_of(pos.piece_on(move.to_sq()))] > 3994)
-        {
-            extension = 1;
-        }
-
-        // ====================================================
-        // SimpleLogics Strength V3
-        //
-        // Give a very small extension to quiet moves that are
-        // strongly supported by the history heuristic.
-        //
-        // Restricted to PV nodes and shallow/mid depths so
-        // search growth remains controlled.
-        // ====================================================
-
-        if (options["SimpleLogics Quiet Extension"]
-            && PvNode
-            && !capture
-            && !givesCheck
-            && depth <= 10
-            && moveCount <= 4
-            && history[pos.moved_piece(move)]
-                            [move.to_sq()] > 6000)
+                                 [type_of(pos.piece_on(move.to_sq()))] > 3000)
         {
             extension = 1;
         }
@@ -154,7 +149,7 @@ insert = '''        givesCheck = pos.gives_check(move);
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V3 patch failed: search anchor not found"
+        "SimpleLogics V4 patch failed: search anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
@@ -171,13 +166,13 @@ new = 'ss << "SimpleLogics " << version << std::setfill'
 
 if old not in s:
     raise SystemExit(
-        "SimpleLogics V3 patch failed: misc.cpp anchor not found"
+        "SimpleLogics V4 patch failed: misc.cpp anchor not found"
     )
 
 s = s.replace(old, new, 1)
 misc.write_text(s)
 
-print("SimpleLogics Strength V3 patch applied successfully.")
+print("SimpleLogics Strength V4 patch applied successfully.")
 ]=])
 
 add_custom_command(
