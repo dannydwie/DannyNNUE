@@ -1,12 +1,12 @@
-name: SimpleLogics A-B Test V2 vs V4
+name: SimpleLogics V5 Automatic Strength Test
 
 on:
   workflow_dispatch:
 
 jobs:
-  ab-test:
+  strength-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
 
@@ -14,11 +14,11 @@ jobs:
       # CHECKOUT
       # =====================================================
 
-      - name: Checkout repository
+      - name: Checkout SimpleLogics
         uses: actions/checkout@v4
 
       # =====================================================
-      # DEPENDENCIES
+      # INSTALL DEPENDENCIES
       # =====================================================
 
       - name: Install dependencies
@@ -28,133 +28,89 @@ jobs:
           python3 -m pip install --break-system-packages python-chess
 
       # =====================================================
-      # SAVE CURRENT V4
+      # BUILD SIMPLELOGICS V5
       # =====================================================
 
-      - name: Save V4 configuration
+      - name: Build SimpleLogics V5
         run: |
-          cp CMakeLists.txt CMakeLists.V4
-
-      # =====================================================
-      # BUILD V2
-      # =====================================================
-
-      - name: Configure V2
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("CMakeLists.txt")
-          s = p.read_text()
-
-          # V4 -> V2
-          s = s.replace(
-              '&& depth <= 16',
-              '&& depth <= 12'
-          )
-
-          s = s.replace(
-              '] > 3000)',
-              '] > 3994)'
-          )
-
-          p.write_text(s)
-          PY
-
-          echo "===== V2 configuration ====="
-          grep -A12 -B3 "Strength V4" CMakeLists.txt || true
-
-          cmake -S . -B build-v2 \
+          cmake -S . -B build-test \
             -DCMAKE_BUILD_TYPE=Release
 
-          cmake --build build-v2 \
+          cmake --build build-test \
             --config Release \
             -j2
 
-          chmod +x build-v2/SimpleLogics
+          chmod +x build-test/SimpleLogics
 
-      # =====================================================
-      # RESTORE V4
-      # =====================================================
-
-      - name: Restore V4 configuration
-        run: |
-          cp CMakeLists.V4 CMakeLists.txt
-
-      # =====================================================
-      # BUILD V4
-      # =====================================================
-
-      - name: Configure V4
-        run: |
-          cmake -S . -B build-v4 \
-            -DCMAKE_BUILD_TYPE=Release
-
-          cmake --build build-v4 \
-            --config Release \
-            -j2
-
-          chmod +x build-v4/SimpleLogics
-
-      # =====================================================
-      # VERIFY UCI
-      # =====================================================
-
-      - name: Verify both engines
-        run: |
-
-          echo "=============================="
-          echo "V2 UCI"
-          echo "=============================="
+          echo "===== SimpleLogics V5 UCI ====="
 
           printf "uci\nquit\n" \
-            | build-v2/SimpleLogics
+            | build-test/SimpleLogics
 
-          echo "=============================="
-          echo "V4 UCI"
-          echo "=============================="
+      # =====================================================
+      # BUILD STOCKFISH BASELINE
+      # =====================================================
+
+      - name: Build Stockfish baseline
+        run: |
+          git clone \
+            --depth 1 \
+            --branch stockfish-dev-20260919-17a6c8f1 \
+            https://github.com/official-stockfish/Stockfish.git \
+            stockfish-test
+
+          make -C stockfish-test/src -j2 net
+
+          make -C stockfish-test/src -j2 \
+            build \
+            ARCH=x86-64 \
+            COMP=gcc
+
+          chmod +x stockfish-test/src/stockfish
+
+          echo "===== Stockfish UCI ====="
 
           printf "uci\nquit\n" \
-            | build-v4/SimpleLogics
+            | stockfish-test/src/stockfish
 
       # =====================================================
-      # A/B TEST
+      # AUTOMATIC TOURNAMENT
       # =====================================================
 
-      - name: Run V2 vs V4 A-B test
+      - name: Run V5 automatic tournament
         run: |
 
-          cat > ab_test.py <<'PYTHON'
+          cat > strength_test.py <<'PYTHON'
 
           import chess
           import chess.engine
           import chess.pgn
-          import random
           import os
           import sys
+          import random
 
 
           # =================================================
           # SETTINGS
           # =================================================
 
-          V2 = os.path.abspath(
-              "build-v2/SimpleLogics"
+          SIMPLELOGICS = os.path.abspath(
+              "build-test/SimpleLogics"
           )
 
-          V4 = os.path.abspath(
-              "build-v4/SimpleLogics"
+          STOCKFISH = os.path.abspath(
+              "stockfish-test/src/stockfish"
           )
 
           GAMES = 100
 
-          NODES = 10000
+          NODES_PER_MOVE = 10000
 
           MAX_PLIES = 180
 
 
           # =================================================
-          # OPENING
+          # GENERATE UNIQUE STARTING POSITION
           # =================================================
 
           def generate_opening(game_number):
@@ -167,15 +123,15 @@ jobs:
 
               opening = []
 
-              for _ in range(8):
+              for ply in range(8):
 
-                  legal = list(
+                  legal_moves = list(
                       board.legal_moves
                   )
 
-                  quiet = []
+                  quiet_moves = []
 
-                  for move in legal:
+                  for move in legal_moves:
 
                       if board.is_capture(move):
                           continue
@@ -187,14 +143,14 @@ jobs:
                       board.pop()
 
                       if not gives_check:
-                          quiet.append(move)
+                          quiet_moves.append(move)
 
-                  moves = (
-                      quiet
-                      if quiet
-                      else legal
-                  )
+                  if quiet_moves:
+                      moves = quiet_moves
+                  else:
+                      moves = legal_moves
 
+                  # Prefer normal development.
                   developing = []
 
                   for move in moves:
@@ -203,7 +159,10 @@ jobs:
                           move.from_square
                       )
 
-                      if piece and piece.piece_type in (
+                      if piece is None:
+                          continue
+
+                      if piece.piece_type in (
                           chess.KNIGHT,
                           chess.BISHOP
                       ):
@@ -222,10 +181,13 @@ jobs:
 
 
           # =================================================
-          # ENGINE CONFIG
+          # CONFIGURE ENGINE
           # =================================================
 
-          def configure(engine):
+          def configure_engine(
+              engine,
+              human_mode=False
+          ):
 
               options = {}
 
@@ -235,77 +197,198 @@ jobs:
               if "Hash" in engine.options:
                   options["Hash"] = 128
 
+              if (
+                  "SimpleLogics Human Mode"
+                  in engine.options
+              ):
+                  options[
+                      "SimpleLogics Human Mode"
+                  ] = human_mode
+
+              if (
+                  "SimpleLogics Human Elo"
+                  in engine.options
+              ):
+                  options[
+                      "SimpleLogics Human Elo"
+                  ] = 2650
+
               if "Skill Level" in engine.options:
                   options["Skill Level"] = 20
-
-              if "SimpleLogics Human Mode" in engine.options:
-                  options["SimpleLogics Human Mode"] = False
 
               engine.configure(options)
 
 
           # =================================================
-          # PLAY GAME
+          # PLAY ONE GAME
           # =================================================
 
-          def play_game(number):
+          def play_game(
+              game_number,
+              simple_white
+          ):
 
-              v2_white = (
-                  number % 2 == 1
+              print("")
+              print("=" * 60)
+
+              print(
+                  f"GAME {game_number}/{GAMES}"
               )
 
-              e2 = None
-              e4 = None
+              if simple_white:
+                  print(
+                      "SimpleLogics V5: WHITE"
+                  )
+              else:
+                  print(
+                      "SimpleLogics V5: BLACK"
+                  )
+
+              print("=" * 60)
+
+              sl = None
+              sf = None
 
               try:
 
-                  e2 = (
+                  # -----------------------------------------
+                  # START ENGINES
+                  # -----------------------------------------
+
+                  sl = (
                       chess.engine
                       .SimpleEngine
-                      .popen_uci(V2)
+                      .popen_uci(
+                          SIMPLELOGICS
+                      )
                   )
 
-                  e4 = (
+                  sf = (
                       chess.engine
                       .SimpleEngine
-                      .popen_uci(V4)
+                      .popen_uci(
+                          STOCKFISH
+                      )
                   )
 
-                  configure(e2)
-                  configure(e4)
+                  # -----------------------------------------
+                  # FULL STRENGTH
+                  # -----------------------------------------
 
-                  board = chess.Board()
+                  configure_engine(
+                      sl,
+                      human_mode=False
+                  )
+
+                  configure_engine(
+                      sf,
+                      human_mode=False
+                  )
+
+                  print(
+                      "SimpleLogics Human Mode: OFF"
+                  )
+
+                  # -----------------------------------------
+                  # CREATE PGN
+                  # -----------------------------------------
+
+                  game = chess.pgn.Game()
+
+                  game.headers[
+                      "Event"
+                  ] = (
+                      "SimpleLogics V5 "
+                      "Automatic Strength Test"
+                  )
+
+                  game.headers[
+                      "Round"
+                  ] = str(game_number)
+
+                  game.headers[
+                      "White"
+                  ] = (
+                      "SimpleLogics V5"
+                      if simple_white
+                      else "Stockfish"
+                  )
+
+                  game.headers[
+                      "Black"
+                  ] = (
+                      "Stockfish"
+                      if simple_white
+                      else "SimpleLogics V5"
+                  )
+
+                  # -----------------------------------------
+                  # APPLY OPENING ONCE
+                  # -----------------------------------------
+
+                  board = game.board()
+
+                  node = game
 
                   opening = generate_opening(
-                      number
+                      game_number
                   )
 
+                  print("Opening: ", end="")
+
                   for move in opening:
+
+                      if move not in board.legal_moves:
+
+                          raise RuntimeError(
+                              "Generated illegal "
+                              f"opening move: {move}"
+                          )
+
+                      print(
+                          board.san(move),
+                          end=" "
+                      )
+
+                      node = (
+                          node.add_variation(
+                              move
+                          )
+                      )
+
                       board.push(move)
 
-                  move_count = 0
-                  different_moves = 0
+                  print("")
+
+                  # -----------------------------------------
+                  # PLAY MAIN GAME
+                  # -----------------------------------------
+
+                  ply = len(
+                      board.move_stack
+                  )
 
                   while (
                       not board.is_game_over(
                           claim_draw=True
                       )
-                      and move_count < MAX_PLIES
+                      and ply < MAX_PLIES
                   ):
 
                       if (
                           board.turn == chess.WHITE
-                      ) == v2_white:
-                          engine = e2
-                      else:
-                          engine = e4
+                      ) == simple_white:
 
-                      before_fen = board.fen()
+                          engine = sl
+
+                      else:
+
+                          engine = sf
 
                       result = engine.play(
                           board,
                           chess.engine.Limit(
-                              nodes=NODES
+                              nodes=NODES_PER_MOVE
                           )
                       )
 
@@ -314,176 +397,243 @@ jobs:
                       if move is None:
                           break
 
-                      # -------------------------------------------------
-                      # Ask the OTHER engine what it would choose from
-                      # exactly the same position.
-                      # -------------------------------------------------
-
-                      other = (
-                          e4
-                          if engine == e2
-                          else e2
-                      )
-
-                      other_result = other.play(
-                          board,
-                          chess.engine.Limit(
-                              nodes=NODES
-                          )
-                      )
-
-                      other_move = (
-                          other_result.move
-                      )
-
-                      if other_move != move:
-                          different_moves += 1
-
                       if move not in board.legal_moves:
+
                           raise RuntimeError(
-                              f"Illegal move: {move}"
+                              "Engine produced "
+                              f"illegal move: {move}"
                           )
+
+                      node = (
+                          node.add_variation(
+                              move
+                          )
+                      )
 
                       board.push(move)
 
-                      move_count += 1
+                      ply += 1
+
+                  # -----------------------------------------
+                  # RESULT
+                  # -----------------------------------------
 
                   if board.is_checkmate():
 
                       if board.turn == chess.BLACK:
-                          result = "1-0"
+                          result_text = "1-0"
                       else:
-                          result = "0-1"
+                          result_text = "0-1"
+
+                  elif board.is_stalemate():
+
+                      result_text = "1/2-1/2"
+
+                  elif (
+                      board.is_insufficient_material()
+                  ):
+
+                      result_text = "1/2-1/2"
+
+                  elif board.can_claim_fifty_moves():
+
+                      result_text = "1/2-1/2"
 
                   else:
-                      result = "1/2-1/2"
 
-                  if v2_white:
+                      result_text = "1/2-1/2"
 
-                      if result == "1-0":
-                          winner = "V2"
-                      elif result == "0-1":
-                          winner = "V4"
+                  game.headers[
+                      "Result"
+                  ] = result_text
+
+                  # -----------------------------------------
+                  # SAVE PGN
+                  # -----------------------------------------
+
+                  with open(
+                      "strength_test.pgn",
+                      "a",
+                      encoding="utf-8"
+                  ) as pgn_file:
+
+                      exporter = (
+                          chess.pgn.FileExporter(
+                              pgn_file
+                          )
+                      )
+
+                      game.accept(
+                          exporter
+                      )
+
+                  # -----------------------------------------
+                  # DETERMINE WINNER
+                  # -----------------------------------------
+
+                  if simple_white:
+
+                      if result_text == "1-0":
+                          winner = "SimpleLogics"
+
+                      elif result_text == "0-1":
+                          winner = "Stockfish"
+
                       else:
                           winner = "DRAW"
 
                   else:
 
-                      if result == "0-1":
-                          winner = "V2"
-                      elif result == "1-0":
-                          winner = "V4"
+                      if result_text == "0-1":
+                          winner = "SimpleLogics"
+
+                      elif result_text == "1-0":
+                          winner = "Stockfish"
+
                       else:
                           winner = "DRAW"
 
                   print(
-                      f"GAME {number}: "
-                      f"{winner} | "
-                      f"different decisions: "
-                      f"{different_moves}"
+                      f"RESULT: {result_text}"
                   )
 
-                  return (
-                      winner,
-                      different_moves
+                  print(
+                      f"WINNER: {winner}"
                   )
+
+                  print(
+                      f"PLIES: {ply}"
+                  )
+
+                  return winner
 
               finally:
 
-                  if e2:
-                      e2.quit()
+                  if sl is not None:
+                      sl.quit()
 
-                  if e4:
-                      e4.quit()
+                  if sf is not None:
+                      sf.quit()
 
 
           # =================================================
-          # TOURNAMENT
+          # START TOURNAMENT
           # =================================================
 
-          v2_wins = 0
-          v4_wins = 0
+          open(
+              "strength_test.pgn",
+              "w",
+              encoding="utf-8"
+          ).close()
+
+          wins = 0
+          losses = 0
           draws = 0
 
-          total_differences = 0
 
-          games_with_difference = 0
-
-
-          for game in range(
+          for game_number in range(
               1,
               GAMES + 1
           ):
 
+              # Alternate colors.
+              simple_white = (
+                  game_number % 2 == 1
+              )
+
               try:
 
-                  winner, differences = (
-                      play_game(game)
+                  result = play_game(
+                      game_number,
+                      simple_white
                   )
 
-                  total_differences += (
-                      differences
-                  )
+                  if result == "SimpleLogics":
 
-                  if differences > 0:
-                      games_with_difference += 1
+                      wins += 1
 
-                  if winner == "V2":
-                      v2_wins += 1
+                  elif result == "Stockfish":
 
-                  elif winner == "V4":
-                      v4_wins += 1
+                      losses += 1
 
                   else:
+
                       draws += 1
 
-              except Exception as e:
+              except Exception as error:
+
+                  print("")
+                  print("=" * 60)
+                  print("TEST ERROR")
+                  print("=" * 60)
 
                   print(
-                      "TEST ERROR:",
-                      repr(e)
+                      repr(error)
                   )
 
                   sys.exit(1)
 
 
           # =================================================
-          # FINAL
+          # FINAL RESULT
           # =================================================
 
           print("")
           print("=" * 60)
-          print("A/B TEST FINAL RESULT")
+          print("SIMPLELOGICS V5 FINAL RESULT")
           print("=" * 60)
 
           print(
-              f"Games:                 {GAMES}"
+              f"Games:        {GAMES}"
           )
 
           print(
-              f"V2 wins:               {v2_wins}"
+              f"SimpleLogics: {wins}"
           )
 
           print(
-              f"V4 wins:               {v4_wins}"
+              f"Stockfish:    {losses}"
           )
 
           print(
-              f"Draws:                 {draws}"
+              f"Draws:        {draws}"
+          )
+
+          score = (
+              wins +
+              draws * 0.5
+          )
+
+          percentage = (
+              score /
+              GAMES *
+              100
           )
 
           print(
-              f"Games with differences:"
-              f" {games_with_difference}"
+              f"Score:        "
+              f"{score:.1f}/{GAMES}"
           )
 
           print(
-              f"Different decisions:   "
-              f"{total_differences}"
+              f"Score %:      "
+              f"{percentage:.1f}%"
           )
 
           print("=" * 60)
 
           PYTHON
 
-          python3 ab_test.py
+          python3 strength_test.py
+
+
+      # =====================================================
+      # UPLOAD PGN
+      # =====================================================
+
+      - name: Upload V5 tournament PGN
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-V5-strength-test-pgn
+          path: strength_test.pgn
+          if-no-files-found: error
