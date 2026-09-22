@@ -44,11 +44,15 @@ insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
 
     options.add(
       "SimpleLogics Recapture Extension",
+      Option(true));
+
+    options.add(
+      "SimpleLogics Quiet Extension",
       Option(true));'''
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics patch failed: engine.cpp anchor not found"
+        "SimpleLogics V3 patch failed: engine.cpp anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
@@ -74,7 +78,7 @@ new_main = '''    Skill   skill =
 
 if old_main not in s:
     raise SystemExit(
-        "SimpleLogics patch failed: main Skill anchor not found"
+        "SimpleLogics V3 patch failed: main Skill anchor not found"
     )
 
 s = s.replace(old_main, new_main, 1)
@@ -91,13 +95,13 @@ new_iter = '''    Skill skill(
 
 if old_iter not in s:
     raise SystemExit(
-        "SimpleLogics patch failed: iterative Skill anchor not found"
+        "SimpleLogics V3 patch failed: iterative Skill anchor not found"
     )
 
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. SimpleLogics Recapture Extension
+# 3. V2 Recapture Extension
 # ============================================================
 
 anchor = '''        givesCheck = pos.gives_check(move);
@@ -109,13 +113,7 @@ insert = '''        givesCheck = pos.gives_check(move);
 
         // ====================================================
         // SimpleLogics Strength V2
-        //
-        // Recapture extension:
-        // If the current move captures on the square where
-        // the opponent just captured, search it one ply deeper.
-        //
-        // This focuses extra search on tactical exchanges
-        // without globally increasing the search depth.
+        // Recapture extension.
         // ====================================================
 
         if (options["SimpleLogics Recapture Extension"]
@@ -129,12 +127,34 @@ insert = '''        givesCheck = pos.gives_check(move);
             extension = 1;
         }
 
+        // ====================================================
+        // SimpleLogics Strength V3
+        //
+        // Give a very small extension to quiet moves that are
+        // strongly supported by the history heuristic.
+        //
+        // Restricted to PV nodes and shallow/mid depths so
+        // search growth remains controlled.
+        // ====================================================
+
+        if (options["SimpleLogics Quiet Extension"]
+            && PvNode
+            && !capture
+            && !givesCheck
+            && depth <= 10
+            && moveCount <= 4
+            && history[pos.moved_piece(move)]
+                            [move.to_sq()] > 6000)
+        {
+            extension = 1;
+        }
+
         // Calculate new depth for this move
         newDepth = depth - 1;'''
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics patch failed: recapture anchor not found"
+        "SimpleLogics V3 patch failed: search anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
@@ -151,13 +171,13 @@ new = 'ss << "SimpleLogics " << version << std::setfill'
 
 if old not in s:
     raise SystemExit(
-        "SimpleLogics patch failed: misc.cpp anchor not found"
+        "SimpleLogics V3 patch failed: misc.cpp anchor not found"
     )
 
 s = s.replace(old, new, 1)
 misc.write_text(s)
 
-print("SimpleLogics Strength V2 patch applied successfully.")
+print("SimpleLogics Strength V3 patch applied successfully.")
 ]=])
 
 add_custom_command(
