@@ -1,0 +1,50 @@
+name: SimpleLogics Download NNUE Dataset
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  download:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Prepare
+        run: |
+          mkdir -p dataset
+
+      - name: Download training dataset
+        run: |
+
+          echo "Downloading Stockfish NNUE training data..."
+
+          wget -c \
+            "https://storage.lczero.org/files/training_data/test60/data_d9_2021_09_02.binpack" \
+            -O dataset/train.binpack
+
+      - name: Check dataset
+        run: |
+
+          echo "Dataset:"
+          ls -lh dataset/
+
+          echo ""
+          echo "File type:"
+          file dataset/train.binpack
+
+          echo ""
+          echo "Size:"
+          du -h dataset/train.binpack
+
+      - name: Upload dataset
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: SimpleLogics-NNUE-dataset
+
+          path: dataset/train.binpack
+
+          if-no-files-found: error
