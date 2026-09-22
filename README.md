@@ -1,6 +1,6 @@
 # SimpleLogicsNNUE
 
-DannyNNUE is a UCI chess engine project designed for DroidFish.
+SimpleLogicsNNUE is a UCI chess engine project designed for DroidFish.
 
 ## Project Goals
 
