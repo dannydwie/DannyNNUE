@@ -7,6 +7,20 @@ set(SF_DIR "${CMAKE_BINARY_DIR}/stockfish")
 set(SF_SRC "${SF_DIR}/src")
 set(SF_OUT "${CMAKE_BINARY_DIR}/SimpleLogics")
 
+# ============================================================
+# SimpleLogics NNUE
+#
+# The Android workflow downloads:
+#   nnue/SimpleLogics-test.nnue
+#
+# This file is copied over the Stockfish default NNUE before
+# the Stockfish build, causing the custom network to be
+# embedded into the SimpleLogics binary.
+# ============================================================
+
+set(SIMPLELOGICS_NNUE
+    "${CMAKE_SOURCE_DIR}/nnue/SimpleLogics-test.nnue")
+
 if(ANDROID)
     set(SF_COMP "ndk")
     set(SF_ARCH "armv8")
@@ -97,23 +111,7 @@ if old_iter not in s:
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. SIMPLELOGICS V5
-#
-# LMR BOOST
-#
-# The Stockfish search reduces later moves using LMR.
-# V5 slightly reduces that reduction for the first few
-# candidate moves at PV nodes.
-#
-# This is deliberately bounded:
-#   - PV nodes only
-#   - quiet moves only
-#   - depth >= 8
-#   - first 4 moves only
-#   - reduction lowered by 256 units
-#
-# The purpose is to give promising early candidates a
-# little more verification without globally increasing depth.
+# 3. SIMPLELOGICS V5 LMR BOOST
 # ============================================================
 
 anchor = '''        int r = reduction(improving, depth, moveCount, delta);
@@ -126,12 +124,6 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
         // SimpleLogics Strength V5
         //
         // Controlled LMR reduction.
-        //
-        // For the first few quiet candidates in a PV node,
-        // reduce the LMR penalty slightly. This makes the
-        // engine verify promising moves more deeply.
-        //
-        // 256 = quarter of one full reduction unit.
         // ====================================================
 
         if (options["SimpleLogics LMR Boost"]
@@ -152,6 +144,7 @@ if anchor not in s:
     )
 
 s = s.replace(anchor, insert, 1)
+search.write_text(s)
 
 # ============================================================
 # 4. BRAND ENGINE AS SIMPLELOGICS
@@ -189,7 +182,24 @@ add_custom_command(
             "${SIMPLELOGICS_PATCH}"
             "${SF_SRC}"
 
+    # Download the normal Stockfish network first so the build
+    # system has the expected NNUE filename available.
     COMMAND make -C "${SF_SRC}" -j2 net
+
+    # Replace the Stockfish network with the SimpleLogics
+    # trained NNUE before compiling the engine.
+    COMMAND "${CMAKE_COMMAND}" -E copy
+            "${SIMPLELOGICS_NNUE}"
+            "${SF_SRC}/nn-134a887f4c8f.nnue"
+
+    # Verify that the custom network was copied successfully.
+    COMMAND "${CMAKE_COMMAND}" -E echo
+            "SimpleLogics NNUE installed:"
+            "${SF_SRC}/nn-134a887f4c8f.nnue"
+
+    COMMAND test
+            -s
+            "${SF_SRC}/nn-134a887f4c8f.nnue"
 
     COMMAND make -C "${SF_SRC}" -j2
             build
