@@ -1,4 +1,4 @@
-name: SimpleLogics NNUE Training Test
+name: SimpleLogics Final NNUE Training
 
 on:
   workflow_dispatch:
@@ -6,8 +6,10 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
+    timeout-minutes: 330
 
     steps:
+
       - name: Checkout SimpleLogics
         uses: actions/checkout@v4
 
@@ -19,7 +21,8 @@ jobs:
             build-essential \
             cmake \
             python3 \
-            python3-pip
+            python3-pip \
+            wget
 
       - name: Clone official NNUE trainer
         run: |
@@ -39,48 +42,63 @@ jobs:
           chmod +x compile_data_loader.sh
           ./compile_data_loader.sh
 
-      - name: Download test dataset
+      - name: Download training dataset
         run: |
           mkdir -p data
 
           wget -L \
-            "https://huggingface.co/datasets/official-stockfish/master-smallnet-binpacks/resolve/main/test77-jan2022-2tb7p.high-simple-eval-1k.min-v2.binpack?download=true" \
-            -O data/test.binpack
+            "https://huggingface.co/datasets/official-stockfish/master-smallnet-binpacks/resolve/main/test79-may2022-16tb7p-filter-v6-dd.min-mar2023.unmin.high-simple-eval-1k.min-v2.binpack?download=true" \
+            -O data/train.binpack
 
-          ls -lh data/test.binpack
+          echo "TRAINING DATASET"
+          ls -lh data/train.binpack
+          file data/train.binpack
+          du -h data/train.binpack
+
+      - name: Download validation dataset
+        run: |
+          wget -L \
+            "https://huggingface.co/datasets/official-stockfish/master-smallnet-binpacks/resolve/main/test77-jan2022-2tb7p.high-simple-eval-1k.min-v2.binpack?download=true" \
+            -O data/validation.binpack
+
+          echo "VALIDATION DATASET"
+          ls -lh data/validation.binpack
+          file data/validation.binpack
+          du -h data/validation.binpack
 
       - name: Check trainer
         working-directory: nnue-pytorch
         run: |
           python3 train.py --help
 
-      - name: Train SimpleLogics NNUE TEST
+      - name: Train SimpleLogics FINAL CANDIDATE
         working-directory: nnue-pytorch
         run: |
+          rm -rf ../training-output
           mkdir -p ../training-output
 
           python3 train.py \
-            ../data/test.binpack \
+            ../data/train.binpack \
             --validation-datasets \
-            ../data/test.binpack \
+            ../data/validation.binpack \
             --features="HalfKAv2_hm^" \
             --accelerator=cpu \
             --compile-backend=inductor \
-            --batch-size=256 \
-            --num-workers=1 \
-            --threads=2 \
+            --batch-size=1024 \
+            --num-workers=2 \
+            --threads=4 \
             --random-fen-skipping=3 \
             --lambda=1.0 \
             --max-epochs=1 \
-            --epoch-size=10000 \
-            --validation-size=1000 \
+            --epoch-size=1000000 \
+            --validation-size=50000 \
             --network-save-period=1 \
             --default-root-dir=../training-output
 
-      - name: Find checkpoint
+      - name: Show training result
         run: |
           echo "=============================================="
-          echo "CHECKPOINT FILES"
+          echo "SIMPLELOGICS FINAL TRAINING RESULT"
           echo "=============================================="
 
           find training-output \
@@ -88,10 +106,14 @@ jobs:
             -name "*.ckpt" \
             -print
 
-      - name: Convert checkpoint to NNUE
-        working-directory: nnue-pytorch
+          echo ""
+          echo "Training directory:"
+          du -sh training-output || true
+
+      - name: Find final checkpoint
+        id: checkpoint
         run: |
-          CKPT=$(find ../training-output \
+          CKPT=$(find training-output \
             -type f \
             -name "*.ckpt" \
             | head -n 1)
@@ -101,27 +123,52 @@ jobs:
             exit 1
           fi
 
-          echo "Using checkpoint:"
+          echo "Checkpoint:"
+          echo "$CKPT"
+
+          echo "path=$CKPT" >> "$GITHUB_OUTPUT"
+
+      - name: Convert FINAL checkpoint to NNUE
+        working-directory: nnue-pytorch
+        run: |
+          CKPT="${{ steps.checkpoint.outputs.path }}"
+
+          echo "Converting:"
           echo "$CKPT"
 
           python3 serialize.py \
             "$CKPT" \
-            ../SimpleLogics-test.nnue \
+            ../SimpleLogics-final.nnue \
             --features="HalfKAv2_hm^"
 
-      - name: Verify NNUE
+      - name: Verify FINAL NNUE
         run: |
           echo "=============================================="
-          echo "SIMPLELOGICS NNUE RESULT"
+          echo "SIMPLELOGICS FINAL NNUE"
           echo "=============================================="
 
-          ls -lh SimpleLogics-test.nnue
-          file SimpleLogics-test.nnue
+          ls -lh SimpleLogics-final.nnue
+          file SimpleLogics-final.nnue
 
-      - name: Upload NNUE only
+          SIZE=$(stat -c%s SimpleLogics-final.nnue)
+
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "ERROR: NNUE file is unexpectedly small."
+            exit 1
+          fi
+
+          echo ""
+          echo "NNUE size: $SIZE bytes"
+          echo "FINAL NNUE verification passed."
+
+      - name: Calculate NNUE SHA256
+        run: |
+          sha256sum SimpleLogics-final.nnue
+
+      - name: Upload FINAL NNUE
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-NNUE-test
-          path: SimpleLogics-test.nnue
+          name: SimpleLogics-Final-NNUE
+          path: SimpleLogics-final.nnue
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
