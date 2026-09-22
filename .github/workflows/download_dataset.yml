@@ -1,0 +1,46 @@
+name: SimpleLogics Download NNUE Dataset
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  download:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Prepare dataset directory
+        run: |
+          mkdir -p dataset
+
+      - name: Download official Stockfish dataset
+        run: |
+          wget -L \
+            "https://drive.usercontent.google.com/download?id=1lFC_tej8WyXojhh7-AmXV_kkrTauEsqt&export=download&confirm=t" \
+            -O dataset/train.binpack
+
+      - name: Check downloaded file
+        run: |
+          echo "=============================================="
+          echo "DATASET CHECK"
+          echo "=============================================="
+
+          ls -lh dataset/train.binpack
+
+          echo ""
+
+          file dataset/train.binpack
+
+          echo ""
+
+          echo "Dataset size:"
+          du -h dataset/train.binpack
+
+      - name: Upload dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-NNUE-dataset
+          path: dataset/train.binpack
+          if-no-files-found: error
