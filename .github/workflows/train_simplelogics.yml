@@ -127,11 +127,11 @@ jobs:
           echo "$CKPT"
 
           echo "path=$CKPT" >> "$GITHUB_OUTPUT"
-
+      
       - name: Convert FINAL checkpoint to NNUE
         working-directory: nnue-pytorch
         run: |
-          CKPT="${{ steps.checkpoint.outputs.path }}"
+          CKPT="../${{ steps.checkpoint.outputs.path }}"
 
           echo "Converting:"
           echo "$CKPT"
@@ -140,7 +140,7 @@ jobs:
             "$CKPT" \
             ../SimpleLogics-final.nnue \
             --features="HalfKAv2_hm^"
-
+            
       - name: Verify FINAL NNUE
         run: |
           echo "=============================================="
