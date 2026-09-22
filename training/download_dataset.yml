@@ -4,45 +4,40 @@ on:
   workflow_dispatch:
 
 jobs:
-
   download:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Prepare
+      - name: Prepare dataset directory
         run: |
           mkdir -p dataset
 
-      - name: Download training dataset
+      - name: Download official Stockfish dataset
         run: |
-
-          echo "Downloading Stockfish NNUE training data..."
-
-          wget -c \
-            "https://storage.lczero.org/files/training_data/test60/data_d9_2021_09_02.binpack" \
+          wget -L \
+            "https://drive.usercontent.google.com/download?id=1lFC_tej8WyXojhh7-AmXV_kkrTauEsqt&export=download&confirm=t" \
             -O dataset/train.binpack
 
-      - name: Check dataset
+      - name: Check downloaded file
         run: |
+          echo "=============================================="
+          echo "DATASET CHECK"
+          echo "=============================================="
 
-          echo "Dataset:"
-          ls -lh dataset/
+          ls -lh dataset/train.binpack
 
-          echo ""
-          echo "File type:"
           file dataset/train.binpack
 
           echo ""
-          echo "Size:"
+          echo "Dataset size:"
           du -h dataset/train.binpack
 
       - name: Upload dataset
         uses: actions/upload-artifact@v4
 
         with:
-
           name: SimpleLogics-NNUE-dataset
 
           path: dataset/train.binpack
