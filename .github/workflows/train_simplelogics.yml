@@ -4,13 +4,10 @@ on:
   workflow_dispatch:
 
 jobs:
-
   train:
-
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout SimpleLogics
         uses: actions/checkout@v4
 
@@ -60,7 +57,6 @@ jobs:
       - name: Train SimpleLogics NNUE TEST
         working-directory: nnue-pytorch
         run: |
-
           mkdir -p ../training-output
 
           python3 train.py \
@@ -81,23 +77,51 @@ jobs:
             --network-save-period=1 \
             --default-root-dir=../training-output
 
-      - name: Show training result
-        if: always()
+      - name: Find checkpoint
         run: |
           echo "=============================================="
-          echo "TRAINING RESULT"
+          echo "CHECKPOINT FILES"
           echo "=============================================="
 
           find training-output \
-            -maxdepth 6 \
             -type f \
-            -print \
-            | sort
+            -name "*.ckpt" \
+            -print
 
-      - name: Upload training result
-        if: always()
+      - name: Convert checkpoint to NNUE
+        working-directory: nnue-pytorch
+        run: |
+          CKPT=$(find ../training-output \
+            -type f \
+            -name "*.ckpt" \
+            | head -n 1)
+
+          if [ -z "$CKPT" ]; then
+            echo "ERROR: No checkpoint found."
+            exit 1
+          fi
+
+          echo "Using checkpoint:"
+          echo "$CKPT"
+
+          python3 serialize.py \
+            "$CKPT" \
+            ../SimpleLogics-test.nnue \
+            --features="HalfKAv2_hm^"
+
+      - name: Verify NNUE
+        run: |
+          echo "=============================================="
+          echo "SIMPLELOGICS NNUE RESULT"
+          echo "=============================================="
+
+          ls -lh SimpleLogics-test.nnue
+          file SimpleLogics-test.nnue
+
+      - name: Upload NNUE only
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-NNUE-training-test
-          path: training-output
-          if-no-files-found: warn
+          name: SimpleLogics-NNUE-test
+          path: SimpleLogics-test.nnue
+          if-no-files-found: error
+          retention-days: 7
