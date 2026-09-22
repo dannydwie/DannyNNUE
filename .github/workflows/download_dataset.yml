@@ -15,32 +15,31 @@ jobs:
         run: |
           mkdir -p dataset
 
-      - name: Download official Stockfish dataset
+      - name: Download test NNUE dataset
         run: |
           wget -L \
-            "https://drive.usercontent.google.com/download?id=1lFC_tej8WyXojhh7-AmXV_kkrTauEsqt&export=download&confirm=t" \
-            -O dataset/train.binpack
+            "https://huggingface.co/datasets/official-stockfish/master-smallnet-binpacks/resolve/main/test77-jan2022-2tb7p.high-simple-eval-1k.min-v2.binpack?download=true" \
+            -O dataset/test.binpack
 
-      - name: Check downloaded file
+      - name: Verify dataset
         run: |
           echo "=============================================="
-          echo "DATASET CHECK"
+          echo "SIMPLELOGICS NNUE DATASET TEST"
           echo "=============================================="
 
-          ls -lh dataset/train.binpack
+          ls -lh dataset/test.binpack
 
           echo ""
 
-          file dataset/train.binpack
+          file dataset/test.binpack
 
           echo ""
 
-          echo "Dataset size:"
-          du -h dataset/train.binpack
+          du -h dataset/test.binpack
 
       - name: Upload dataset
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-NNUE-dataset
-          path: dataset/train.binpack
+          name: SimpleLogics-NNUE-test-dataset
+          path: dataset/test.binpack
           if-no-files-found: error
