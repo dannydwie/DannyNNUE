@@ -24,7 +24,7 @@ import sys
 src = Path(sys.argv[1])
 
 # ============================================================
-# 1. SimpleLogics UCI options
+# 1. SimpleLogics UCI OPTIONS
 # ============================================================
 
 engine = src / "engine.cpp"
@@ -43,19 +43,19 @@ insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
       Option(2650, 2501, 2800));
 
     options.add(
-      "SimpleLogics Recapture Extension",
+      "SimpleLogics LMR Boost",
       Option(true));'''
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V4 patch failed: engine.cpp anchor not found"
+        "SimpleLogics V5 patch failed: engine.cpp anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
 engine.write_text(s)
 
 # ============================================================
-# 2. Human Mode connection
+# 2. HUMAN MODE CONNECTION
 # ============================================================
 
 search = src / "search.cpp"
@@ -74,7 +74,7 @@ new_main = '''    Skill   skill =
 
 if old_main not in s:
     raise SystemExit(
-        "SimpleLogics V4 patch failed: main Skill anchor not found"
+        "SimpleLogics V5 patch failed: main Skill anchor not found"
     )
 
 s = s.replace(old_main, new_main, 1)
@@ -91,71 +91,70 @@ new_iter = '''    Skill skill(
 
 if old_iter not in s:
     raise SystemExit(
-        "SimpleLogics V4 patch failed: iterative Skill anchor not found"
+        "SimpleLogics V5 patch failed: iterative Skill anchor not found"
     )
 
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 3. SimpleLogics Strength V4
+# 3. SIMPLELOGICS V5
 #
-# Recapture extension tuning.
+# LMR BOOST
 #
-# V2 baseline:
-#   depth <= 12
-#   captureHistory > 3994
+# The Stockfish search reduces later moves using LMR.
+# V5 slightly reduces that reduction for the first few
+# candidate moves at PV nodes.
 #
-# V4 experiment:
-#   depth <= 16
-#   captureHistory > 3000
+# This is deliberately bounded:
+#   - PV nodes only
+#   - quiet moves only
+#   - depth >= 8
+#   - first 4 moves only
+#   - reduction lowered by 256 units
 #
-# Everything else remains unchanged.
+# The purpose is to give promising early candidates a
+# little more verification without globally increasing depth.
 # ============================================================
 
-anchor = '''        givesCheck = pos.gives_check(move);
+anchor = '''        int r = reduction(improving, depth, moveCount, delta);
 
-        // Calculate new depth for this move
-        newDepth = depth - 1;'''
+        // Increase reduction for ttPv nodes'''
 
-insert = '''        givesCheck = pos.gives_check(move);
+insert = '''        int r = reduction(improving, depth, moveCount, delta);
 
         // ====================================================
-        // SimpleLogics Strength V4
+        // SimpleLogics Strength V5
         //
-        // Slightly broader recapture extension.
+        // Controlled LMR reduction.
         //
-        // The extension is still restricted to:
-        //   - PV nodes
-        //   - captures
-        //   - recaptures on the previous destination square
+        // For the first few quiet candidates in a PV node,
+        // reduce the LMR penalty slightly. This makes the
+        // engine verify promising moves more deeply.
         //
-        // Compared with V2, only the depth limit and
-        // capture-history threshold are changed.
+        // 256 = quarter of one full reduction unit.
         // ====================================================
 
-        if (options["SimpleLogics Recapture Extension"]
+        if (options["SimpleLogics LMR Boost"]
             && PvNode
-            && capture
-            && move.to_sq() == prevSq
-            && depth <= 16
-            && captureHistory[movedPiece][move.to_sq()]
-                                 [type_of(pos.piece_on(move.to_sq()))] > 3000)
+            && !capture
+            && !givesCheck
+            && depth >= 8
+            && moveCount <= 4)
         {
-            extension = 1;
+            r -= 256;
         }
 
-        // Calculate new depth for this move
-        newDepth = depth - 1;'''
+        // Increase reduction for ttPv nodes'''
 
 if anchor not in s:
     raise SystemExit(
-        "SimpleLogics V4 patch failed: search anchor not found"
+        "SimpleLogics V5 patch failed: LMR anchor not found"
     )
 
 s = s.replace(anchor, insert, 1)
 
 # ============================================================
-# 4. Brand engine as SimpleLogics
+# 4. BRAND ENGINE AS SIMPLELOGICS
 # ============================================================
 
 misc = src / "misc.cpp"
@@ -166,13 +165,13 @@ new = 'ss << "SimpleLogics " << version << std::setfill'
 
 if old not in s:
     raise SystemExit(
-        "SimpleLogics V4 patch failed: misc.cpp anchor not found"
+        "SimpleLogics V5 patch failed: misc.cpp anchor not found"
     )
 
 s = s.replace(old, new, 1)
 misc.write_text(s)
 
-print("SimpleLogics Strength V4 patch applied successfully.")
+print("SimpleLogics Strength V5 patch applied successfully.")
 ]=])
 
 add_custom_command(
