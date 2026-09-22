@@ -11,29 +11,31 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. Checkout SimpleLogics
+      # 1. CHECKOUT
       # ============================================================
       - name: Checkout SimpleLogics
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. Install dependencies
+      # 2. INSTALL DEPENDENCIES
       # ============================================================
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             git \
             build-essential \
             cmake \
             python3 \
             python3-pip \
-            wget \
-            cutechess
+            wget
+
+          python3 -m pip install --upgrade pip --break-system-packages
+          python3 -m pip install python-chess --break-system-packages
 
       # ============================================================
-      # 3. Build OFFICIAL Stockfish baseline
-      #    Same exact Stockfish tag used by SimpleLogics
+      # 3. CLONE EXACT STOCKFISH VERSION
       # ============================================================
       - name: Clone official Stockfish
         run: |
@@ -43,30 +45,38 @@ jobs:
             stockfish-test
 
       # ============================================================
-      # 4. Download official NNUE used by that Stockfish tag
+      # 4. DOWNLOAD OFFICIAL STOCKFISH NNUE
       # ============================================================
       - name: Download official Stockfish NNUE
         working-directory: stockfish-test/src
         run: |
+          echo "Downloading official Stockfish NNUE..."
+
           make net
 
-          echo "Official NNUE files:"
+          echo ""
+          echo "Available NNUE files:"
           ls -lh nn-*.nnue
 
-          NET=$(find . -maxdepth 1 -name 'nn-*.nnue' -type f | head -n 1)
+          NET=$(find . -maxdepth 1 -type f -name 'nn-*.nnue' | head -n 1)
 
           if [ -z "$NET" ]; then
-            echo "ERROR: Official Stockfish NNUE was not downloaded."
+            echo "ERROR: Official NNUE not found."
             exit 1
           fi
 
-          echo "Using official network:"
+          echo ""
+          echo "Official NNUE selected:"
           echo "$NET"
 
           cp "$NET" ../../official-stockfish.nnue
 
+          echo ""
+          echo "Copied official NNUE:"
+          ls -lh ../../official-stockfish.nnue
+
       # ============================================================
-      # 5. Build official Stockfish
+      # 5. BUILD OFFICIAL STOCKFISH
       # ============================================================
       - name: Build official Stockfish
         working-directory: stockfish-test/src
@@ -74,27 +84,29 @@ jobs:
           make -j2 build ARCH=x86-64-modern
 
           if [ ! -f stockfish ]; then
-            echo "ERROR: Stockfish build failed."
+            echo "ERROR: Stockfish binary was not created."
             exit 1
           fi
 
-          ./stockfish bench 16 1 1 default depth 8
+          echo "Stockfish build OK."
+
+          ./stockfish uci | head -n 20
 
       # ============================================================
-      # 6. Prepare official NNUE for SimpleLogics
+      # 6. PREPARE OFFICIAL NNUE FOR SIMPLELOGICS
       # ============================================================
-      - name: Prepare official NNUE for SimpleLogics
+      - name: Prepare official NNUE
         run: |
           mkdir -p nnue
 
           cp official-stockfish.nnue \
             nnue/SimpleLogics-test.nnue
 
-          echo "SimpleLogics will use:"
+          echo "NNUE used by SimpleLogics:"
           ls -lh nnue/SimpleLogics-test.nnue
 
       # ============================================================
-      # 7. Build SimpleLogics
+      # 7. BUILD SIMPLELOGICS
       # ============================================================
       - name: Build SimpleLogics
         run: |
@@ -105,17 +117,21 @@ jobs:
 
           cmake --build build --parallel 2
 
-          echo "Searching for SimpleLogics binary:"
+          echo ""
+          echo "Executable files:"
           find build -type f -perm -111 -print
 
       # ============================================================
-      # 8. Locate SimpleLogics binary
+      # 8. FIND SIMPLELOGICS
       # ============================================================
-      - name: Locate SimpleLogics binary
+      - name: Prepare SimpleLogics binary
         run: |
           SIMPLE=$(find build -type f -perm -111 \
-            \( -name "simplelogics" -o -name "SimpleLogics" \) \
-            | head -n 1)
+            \( \
+              -name "simplelogics" \
+              -o -name "SimpleLogics" \
+              -o -name "stockfish" \
+            \) | head -n 1)
 
           if [ -z "$SIMPLE" ]; then
             echo "ERROR: SimpleLogics binary not found."
@@ -129,94 +145,308 @@ jobs:
 
           chmod +x ./simplelogics
 
+          echo ""
+          echo "Testing SimpleLogics UCI:"
           ./simplelogics uci
 
       # ============================================================
-      # 9. Prepare Stockfish binary
+      # 9. PREPARE STOCKFISH BINARY
       # ============================================================
       - name: Prepare Stockfish binary
         run: |
           cp stockfish-test/src/stockfish ./stockfish
+
           chmod +x ./stockfish
 
-          echo "Stockfish:"
+          echo "Testing Stockfish UCI:"
           ./stockfish uci | head -n 20
 
       # ============================================================
-      # 10. Verify both engines
+      # 10. BENCH BOTH ENGINES
       # ============================================================
-      - name: Verify engines
+      - name: Run engine benchmark
         run: |
-          echo "======================================"
-          echo "STOCKFISH BENCH"
-          echo "======================================"
+          echo "=============================================="
+          echo " STOCKFISH BENCH"
+          echo "=============================================="
 
           ./stockfish bench 16 1 1 default depth 10
 
           echo ""
-          echo "======================================"
-          echo "SIMPLELOGICS BENCH"
-          echo "======================================"
+          echo "=============================================="
+          echo " SIMPLELOGICS BENCH"
+          echo "=============================================="
 
           ./simplelogics bench 16 1 1 default depth 10
 
       # ============================================================
-      # 11. Run 100 game diagnostic
-      #
-      # Same official NNUE on both engines.
-      # 10,000 nodes/move.
-      # Colors alternate.
+      # 11. CREATE PYTHON TOURNAMENT SCRIPT
+      # ============================================================
+      - name: Create tournament script
+        run: |
+          cat > tournament.py <<'PYTHON'
+          import chess
+          import chess.pgn
+          import chess.engine
+          import os
+          import sys
+          import time
+
+          SIMPLELOGICS = os.path.abspath("./simplelogics")
+          STOCKFISH = os.path.abspath("./stockfish")
+
+          GAMES = 100
+          NODES = 10000
+          MAX_PLIES = 180
+
+          RESULTS_DIR = "results"
+          os.makedirs(RESULTS_DIR, exist_ok=True)
+
+          def configure(engine, simple=False):
+              try:
+                  engine.configure({
+                      "Threads": 1,
+                      "Hash": 32
+                  })
+              except Exception:
+                  pass
+
+              if simple:
+                  try:
+                      engine.configure({
+                          "SimpleLogics Human Mode": False
+                      })
+                  except Exception:
+                      pass
+
+                  try:
+                      engine.configure({
+                          "SimpleLogics LMR Boost": True
+                      })
+                  except Exception:
+                      pass
+
+          def play_game(game_number):
+              simple_white = (game_number % 2 == 1)
+
+              white_name = "SimpleLogics" if simple_white else "Stockfish"
+              black_name = "Stockfish" if simple_white else "SimpleLogics"
+
+              print(
+                  f"\nGAME {game_number}/{GAMES}: "
+                  f"{white_name} WHITE - {black_name} BLACK",
+                  flush=True
+              )
+
+              white_engine = None
+              black_engine = None
+
+              try:
+                  white_path = SIMPLELOGICS if simple_white else STOCKFISH
+                  black_path = STOCKFISH if simple_white else SIMPLELOGICS
+
+                  white_engine = chess.engine.SimpleEngine.popen_uci(white_path)
+                  black_engine = chess.engine.SimpleEngine.popen_uci(black_path)
+
+                  configure(white_engine, simple=simple_white)
+                  configure(black_engine, simple=not simple_white)
+
+                  board = chess.Board()
+
+                  game = chess.pgn.Game()
+                  game.headers["Event"] = "SimpleLogics Official NNUE Diagnostic"
+                  game.headers["Site"] = "GitHub Actions"
+                  game.headers["Round"] = str(game_number)
+                  game.headers["White"] = white_name
+                  game.headers["Black"] = black_name
+                  game.headers["WhiteEngine"] = white_name
+                  game.headers["BlackEngine"] = black_name
+                  game.headers["NodesPerMove"] = str(NODES)
+
+                  node = game
+
+                  for ply in range(MAX_PLIES):
+                      if board.is_game_over(claim_draw=True):
+                          break
+
+                      engine = white_engine if board.turn == chess.WHITE else black_engine
+
+                      try:
+                          result = engine.play(
+                              board,
+                              chess.engine.Limit(nodes=NODES)
+                          )
+                      except Exception as e:
+                          print(
+                              f"Engine error in game {game_number}: {e}",
+                              flush=True
+                          )
+                          game.headers["Result"] = "0-1" if board.turn == chess.WHITE else "1-0"
+                          game.headers["Termination"] = "engine error"
+                          return game
+
+                      move = result.move
+
+                      if move is None or move not in board.legal_moves:
+                          print(
+                              f"Illegal/no move in game {game_number}",
+                              flush=True
+                          )
+                          game.headers["Result"] = "0-1" if board.turn == chess.WHITE else "1-0"
+                          game.headers["Termination"] = "illegal move"
+                          return game
+
+                      node = node.add_variation(move)
+                      board.push(move)
+
+                  if board.is_checkmate():
+                      result = "0-1" if board.turn == chess.WHITE else "1-0"
+                      termination = "checkmate"
+                  elif board.is_stalemate():
+                      result = "1/2-1/2"
+                      termination = "stalemate"
+                  elif board.is_insufficient_material():
+                      result = "1/2-1/2"
+                      termination = "insufficient material"
+                  elif board.can_claim_fifty_moves():
+                      result = "1/2-1/2"
+                      termination = "50-move rule"
+                  elif board.can_claim_threefold_repetition():
+                      result = "1/2-1/2"
+                      termination = "threefold repetition"
+                  else:
+                      result = "1/2-1/2"
+                      termination = "maximum plies"
+
+                  game.headers["Result"] = result
+                  game.headers["Termination"] = termination
+                  game.headers["PlyCount"] = str(board.ply())
+
+                  print(
+                      f"RESULT: {white_name} - {black_name} = "
+                      f"{result} ({termination})",
+                      flush=True
+                  )
+
+                  return game
+
+              finally:
+                  if white_engine is not None:
+                      try:
+                          white_engine.quit()
+                      except Exception:
+                          pass
+
+                  if black_engine is not None:
+                      try:
+                          black_engine.quit()
+                      except Exception:
+                          pass
+
+          def main():
+              pgn_path = os.path.join(
+                  RESULTS_DIR,
+                  "official-nnue-diagnostic.pgn"
+              )
+
+              simple_wins = 0
+              stockfish_wins = 0
+              draws = 0
+
+              with open(pgn_path, "w", encoding="utf-8") as pgn_file:
+
+                  for game_number in range(1, GAMES + 1):
+
+                      game = play_game(game_number)
+
+                      result = game.headers.get("Result", "*")
+
+                      if result == "1/2-1/2":
+                          draws += 1
+                      elif result == "1-0":
+                          if game.headers["White"] == "SimpleLogics":
+                              simple_wins += 1
+                          else:
+                              stockfish_wins += 1
+                      elif result == "0-1":
+                          if game.headers["Black"] == "SimpleLogics":
+                              simple_wins += 1
+                          else:
+                              stockfish_wins += 1
+
+                      exporter = chess.pgn.StringExporter(
+                          headers=True,
+                          variations=True,
+                          comments=False
+                      )
+
+                      pgn_file.write(game.accept(exporter))
+                      pgn_file.write("\n\n")
+                      pgn_file.flush()
+
+                      print(
+                          f"Running score: "
+                          f"SimpleLogics {simple_wins}, "
+                          f"Stockfish {stockfish_wins}, "
+                          f"Draws {draws}",
+                          flush=True
+                      )
+
+              total_score = simple_wins + draws * 0.5
+              score_percent = 100.0 * total_score / GAMES
+
+              print("\n")
+              print("================================================")
+              print(" SIMPLELOGICS OFFICIAL NNUE DIAGNOSTIC")
+              print("================================================")
+              print(f"Games       : {GAMES}")
+              print(f"Simple wins : {simple_wins}")
+              print(f"Stockfish   : {stockfish_wins}")
+              print(f"Draws       : {draws}")
+              print(f"Score       : {total_score:.1f}/{GAMES}")
+              print(f"Score %     : {score_percent:.1f}%")
+              print("================================================")
+              print("")
+              print("Both engines used the SAME official Stockfish NNUE.")
+              print("Stockfish:")
+              print("stockfish-dev-20260919-17a6c8f1")
+              print(f"Nodes/move: {NODES}")
+              print("================================================")
+
+          if __name__ == "__main__":
+              main()
+          PYTHON
+
+          python3 -m py_compile tournament.py
+
+      # ============================================================
+      # 12. RUN 100 GAME TEST
       # ============================================================
       - name: Run 100 game diagnostic
         run: |
-          mkdir -p results
-
-          cutechess-cli \
-            -engine name=SimpleLogics cmd=./simplelogics \
-            -engine name=Stockfish cmd=./stockfish \
-            -each \
-              proto=uci \
-              tc=inf nodes=10000 \
-              option.SimpleLogics\ Human\ Mode=false \
-              option.SimpleLogics\ LMR\ Boost=true \
-            -games 100 \
-            -repeat \
-            -rounds 50 \
-            -openings file=/usr/share/games/chess/*.pgn \
-            -concurrency 2 \
-            -maxmoves 180 \
-            -recover \
-            -pgnout results/official-nnue-diagnostic.pgn \
-            -resign movecount=3 score=1000 \
-            -draw movenumber=40 movecount=8 score=10
+          python3 tournament.py
 
       # ============================================================
-      # 12. Summary
+      # 13. SHOW RESULT
       # ============================================================
-      - name: Print diagnostic result
+      - name: Show final result
         run: |
           echo ""
           echo "================================================"
-          echo " SIMPLELOGICS OFFICIAL NNUE DIAGNOSTIC"
+          echo " FINAL DIAGNOSTIC RESULT"
           echo "================================================"
+
+          ls -lh results/
+
           echo ""
-          echo "Both engines used the SAME official NNUE."
-          echo "Stockfish tag:"
-          echo "stockfish-dev-20260919-17a6c8f1"
-          echo ""
-          echo "Time control:"
-          echo "10,000 nodes / move"
-          echo ""
-          echo "Games:"
-          echo "100"
-          echo ""
-          echo "PGN:"
-          ls -lh results/official-nnue-diagnostic.pgn
+          echo "PGN games:"
+          wc -l results/official-nnue-diagnostic.pgn
+
           echo ""
           echo "================================================"
 
       # ============================================================
-      # 13. Upload PGN
+      # 14. UPLOAD PGN
       # ============================================================
       - name: Upload diagnostic PGN
         uses: actions/upload-artifact@v4
