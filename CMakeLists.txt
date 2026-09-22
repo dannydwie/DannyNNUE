@@ -44,10 +44,6 @@ print("Stockfish tag:", SF_TAG)
 print("NNUE source:", NNUE_SOURCE)
 print("")
 
-# ============================================================
-# 1. CHECK CUSTOM NNUE
-# ============================================================
-
 if not NNUE_SOURCE.is_file():
     raise SystemExit(
         f"ERROR: Custom NNUE not found: {NNUE_SOURCE}"
@@ -70,10 +66,6 @@ print("Custom NNUE size :", size)
 print("Custom NNUE SHA256:", sha256)
 print("Stockfish NNUE name:", network_name)
 print("")
-
-# ============================================================
-# 2. CLONE STOCKFISH
-# ============================================================
 
 if SF_DIR.exists():
     shutil.rmtree(SF_DIR)
@@ -98,7 +90,7 @@ if not SF_SRC.is_dir():
     )
 
 # ============================================================
-# 3. SIMPLELOGICS UCI OPTIONS
+# SIMPLELOGICS UCI OPTIONS
 # ============================================================
 
 engine = SF_SRC / "engine.cpp"
@@ -129,7 +121,7 @@ s = s.replace(anchor, insert, 1)
 engine.write_text(s)
 
 # ============================================================
-# 4. HUMAN MODE
+# HUMAN MODE
 # ============================================================
 
 search = SF_SRC / "search.cpp"
@@ -171,7 +163,7 @@ if old_iter not in s:
 s = s.replace(old_iter, new_iter, 1)
 
 # ============================================================
-# 5. SIMPLELOGICS LMR BOOST
+# SIMPLELOGICS SEARCH V1
 # ============================================================
 
 anchor = '''        int r = reduction(improving, depth, moveCount, delta);
@@ -181,17 +173,37 @@ anchor = '''        int r = reduction(improving, depth, moveCount, delta);
 insert = '''        int r = reduction(improving, depth, moveCount, delta);
 
         // ====================================================
-        // SimpleLogics Strength V5
+        // SimpleLogics Search V1
+        // Quality-aware LMR
         // ====================================================
 
-        if (options["SimpleLogics LMR Boost"]
-            && PvNode
-            && !capture
-            && !givesCheck
-            && depth >= 8
-            && moveCount <= 4)
+        if (options["SimpleLogics LMR Boost"] && depth >= 8 && moveCount > 1)
         {
-            r -= 256;
+            int slHistory =
+              (*contHist[0])[movedPiece][move.to_sq()]
+              + (*contHist[1])[movedPiece][move.to_sq()]
+              + sharedHistory.pawn_entry(pos)[movedPiece][move.to_sq()]
+              + mainHistory[us][move.raw()];
+
+            int slQuality = std::clamp(slHistory / 24, -384, 384);
+
+            // Good history -> search deeper.
+            // Bad history -> search shallower.
+            r -= slQuality;
+
+            // Preserve tactical and early-PV candidates.
+            if (capture)
+                r -= 192;
+
+            if (givesCheck)
+                r -= 320;
+
+            if (PvNode && moveCount <= 4)
+                r -= 160;
+
+            // Avoid over-searching very late, poor quiet moves.
+            if (moveCount > 8 && slQuality < -192)
+                r += 128;
         }
 
         // Increase reduction for ttPv nodes'''
@@ -205,7 +217,7 @@ s = s.replace(anchor, insert, 1)
 search.write_text(s)
 
 # ============================================================
-# 6. BRANDING
+# BRANDING
 # ============================================================
 
 misc = SF_SRC / "misc.cpp"
@@ -223,7 +235,7 @@ s = s.replace(old, new, 1)
 misc.write_text(s)
 
 # ============================================================
-# 7. INSTALL CUSTOM NNUE WITH CORRECT SHA256 NAME
+# INSTALL CUSTOM NNUE
 # ============================================================
 
 network_path = SF_SRC / network_name
@@ -238,7 +250,6 @@ print("Custom NNUE installed:")
 print(network_path)
 print("")
 
-# Verify filename matches SHA256
 installed_sha256 = hashlib.sha256(
     network_path.read_bytes()
 ).hexdigest()
@@ -249,7 +260,7 @@ if installed_sha256[:12] != sha256[:12]:
     )
 
 # ============================================================
-# 8. PATCH STOCKFISH DEFAULT NETWORK
+# PATCH DEFAULT NNUE
 # ============================================================
 
 evaluate = SF_SRC / "evaluate.h"
@@ -284,7 +295,7 @@ print(new_default)
 print("")
 
 # ============================================================
-# 9. BUILD STOCKFISH
+# BUILD
 # ============================================================
 
 print("==============================================")
@@ -306,7 +317,7 @@ subprocess.run(
 )
 
 # ============================================================
-# 10. VERIFY NNUE WAS NOT REPLACED
+# VERIFY NNUE
 # ============================================================
 
 final_network = SF_SRC / network_name
@@ -337,7 +348,7 @@ print("FINAL NNUE SHA256 verification PASSED.")
 print("")
 
 # ============================================================
-# 11. COPY ENGINE
+# COPY ENGINE
 # ============================================================
 
 stockfish_binary = SF_SRC / "stockfish"
