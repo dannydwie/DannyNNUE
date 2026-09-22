@@ -1,0 +1,126 @@
+name: SimpleLogics Generate NNUE Dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      positions:
+        description: "Target jumlah posisi training"
+        required: true
+        default: "1000000"
+        type: string
+
+      depth:
+        description: "Depth teacher"
+        required: true
+        default: "8"
+        type: string
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout SimpleLogics
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            build-essential \
+            cmake \
+            python3 \
+            python3-pip \
+            wget \
+            unzip
+
+      - name: Clone Stockfish
+        run: |
+          git clone --depth 1 \
+            https://github.com/official-stockfish/Stockfish.git \
+            stockfish
+
+      - name: Build Stockfish
+        working-directory: stockfish/src
+        run: |
+          make -j2 build ARCH=x86-64-modern
+
+      - name: Show engine information
+        working-directory: stockfish/src
+        run: |
+          ./stockfish << EOF
+          uci
+          quit
+          EOF
+
+      - name: Prepare dataset directory
+        run: |
+          mkdir -p dataset
+          mkdir -p dataset/training
+          mkdir -p dataset/validation
+
+      - name: Dataset generation information
+        run: |
+          echo "=============================================="
+          echo "SimpleLogics NNUE DATASET GENERATION"
+          echo "=============================================="
+          echo ""
+          echo "Requested positions:"
+          echo "${{ inputs.positions }}"
+          echo ""
+          echo "Teacher depth:"
+          echo "${{ inputs.depth }}"
+          echo ""
+          echo "IMPORTANT:"
+          echo "A normal Stockfish tournament binary does not"
+          echo "produce the modern .binpack training format."
+          echo ""
+          echo "The official NNUE workflow uses dedicated data"
+          echo "generation tooling."
+          echo ""
+          echo "This job verifies the environment first instead"
+          echo "of producing an invalid fake dataset."
+          echo ""
+
+      - name: Download official NNUE trainer
+        run: |
+          git clone --depth 1 \
+            https://github.com/official-stockfish/nnue-pytorch.git \
+            nnue-pytorch
+
+      - name: Inspect data loader
+        working-directory: nnue-pytorch
+        run: |
+          echo "NNUE trainer:"
+          git log -1 --oneline
+
+          echo ""
+          echo "Available data-loader files:"
+          find data_loader -maxdepth 3 -type f | sort | head -100
+
+      - name: Verify trainer
+        working-directory: nnue-pytorch
+        run: |
+          python3 --version
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: Save generation configuration
+        run: |
+          cat > dataset/config.txt << EOF
+          SimpleLogics NNUE V1
+          positions=${{ inputs.positions }}
+          depth=${{ inputs.depth }}
+          feature=HalfKAv2_hm^
+          format=binpack
+          teacher=Stockfish
+          EOF
+
+          cat dataset/config.txt
+
+      - name: Upload dataset configuration
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-NNUE-dataset-config
+          path: dataset/config.txt
