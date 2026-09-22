@@ -151,9 +151,9 @@ search = SF_SRC / "search.cpp"
 s = search.read_text()
 
 
-# ------------------------------------------------------------
+# ============================================================
 # HUMAN MODE
-# ------------------------------------------------------------
+# ============================================================
 
 old_main = '''    Skill   skill =
       Skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
@@ -240,10 +240,6 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
         // SimpleLogics Hybrid Search V2
         //
         // Lc0-inspired policy guidance.
-        //
-        // This does NOT run Lc0 as a second engine.
-        // Instead it adds a bounded neural-policy-style
-        // strategic prior to the alpha-beta search.
         // ====================================================
 
         if (options["SimpleLogics Hybrid Search"]
@@ -263,17 +259,13 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
               + std::abs(toRank - 3);
 
 
-            // ------------------------------------------------
             // Central influence
-            // ------------------------------------------------
 
             policyPrior +=
               (6 - centerDistance) * 18;
 
 
-            // ------------------------------------------------
             // Pawn advancement
-            // ------------------------------------------------
 
             if (type_of(movedPiece) == PAWN)
             {
@@ -289,9 +281,7 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
             }
 
 
-            // ------------------------------------------------
             // Minor-piece development
-            // ------------------------------------------------
 
             if (type_of(movedPiece) == KNIGHT
                 || type_of(movedPiece) == BISHOP)
@@ -307,33 +297,25 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
             }
 
 
-            // ------------------------------------------------
-            // King safety
-            // ------------------------------------------------
+            // Castling
 
             if (move.type_of() == CASTLING)
                 policyPrior += 120;
 
 
-            // ------------------------------------------------
             // Promotion
-            // ------------------------------------------------
 
             if (move.type_of() == PROMOTION)
                 policyPrior += 320;
 
 
-            // ------------------------------------------------
             // Checks
-            // ------------------------------------------------
 
             if (givesCheck)
                 policyPrior += 180;
 
 
-            // ------------------------------------------------
-            // Bound the policy contribution
-            // ------------------------------------------------
+            // Bound policy contribution
 
             policyPrior =
               std::clamp(
@@ -342,13 +324,7 @@ insert = '''        int r = reduction(improving, depth, moveCount, delta);
                 384);
 
 
-            // ------------------------------------------------
-            // Good policy candidates:
-            // search deeper.
-            //
-            // Bad policy candidates:
-            // reduce slightly more.
-            // ------------------------------------------------
+            // Apply policy guidance
 
             r -= policyPrior;
         }
@@ -374,7 +350,7 @@ movepick = SF_SRC / "movepick.cpp"
 s = movepick.read_text()
 
 
-# Add required headers.
+# Add required headers
 
 if "#include <algorithm>" not in s:
     s = s.replace(
@@ -391,9 +367,9 @@ if "#include <cmath>" not in s:
     )
 
 
-# ------------------------------------------------------------
-# Quiet move policy prior
-# ------------------------------------------------------------
+# ============================================================
+# QUIET MOVE POLICY
+# ============================================================
 
 mp_anchor = '''            // bonus for checks
             value += ((pos.check_squares(pt) & to) && pos.see_ge(m, -75)) * 16384;
@@ -406,10 +382,6 @@ mp_insert = '''            // bonus for checks
 
             // =================================================
             // SimpleLogics Hybrid Policy Prior
-            //
-            // Lc0-inspired strategic move ordering.
-            // History remains the main signal.
-            // This is only a bounded additional prior.
             // =================================================
 
             int policyPrior = 0;
@@ -421,17 +393,13 @@ mp_insert = '''            // bonus for checks
               std::abs(int(rank_of(to)) - 3);
 
 
-            // -------------------------------------------------
             // Central influence
-            // -------------------------------------------------
 
             policyPrior +=
               (6 - fileDistance - rankDistance) * 32;
 
 
-            // -------------------------------------------------
             // Pawn advancement
-            // -------------------------------------------------
 
             if (pt == PAWN)
             {
@@ -447,9 +415,7 @@ mp_insert = '''            // bonus for checks
             }
 
 
-            // -------------------------------------------------
             // Minor-piece development
-            // -------------------------------------------------
 
             if (pt == KNIGHT || pt == BISHOP)
             {
@@ -461,25 +427,19 @@ mp_insert = '''            // bonus for checks
             }
 
 
-            // -------------------------------------------------
             // Castling
-            // -------------------------------------------------
 
             if (m.type_of() == CASTLING)
                 policyPrior += 180;
 
 
-            // -------------------------------------------------
             // Promotion
-            // -------------------------------------------------
 
             if (m.type_of() == PROMOTION)
                 policyPrior += 400;
 
 
-            // -------------------------------------------------
-            // Keep policy bounded.
-            // -------------------------------------------------
+            // Keep policy bounded
 
             policyPrior =
               std::clamp(
@@ -511,8 +471,7 @@ movepick.write_text(s)
 # NNUE INSTALLATION
 # ============================================================
 
-network_path =
-    SF_SRC / network_name
+network_path = SF_SRC / network_name
 
 shutil.copy2(
     NNUE_SOURCE,
@@ -553,8 +512,7 @@ if old_default is None:
         "ERROR: EvalFileDefaultName not found"
     )
 
-new_default =
-    f'#define EvalFileDefaultName "{network_name}"'
+new_default = f'#define EvalFileDefaultName "{network_name}"'
 
 s = s.replace(
     old_default,
@@ -610,8 +568,7 @@ subprocess.run(
 # VERIFY ENGINE
 # ============================================================
 
-stockfish_binary =
-    SF_SRC / "stockfish"
+stockfish_binary = SF_SRC / "stockfish"
 
 if not stockfish_binary.is_file():
     raise SystemExit(
@@ -619,10 +576,11 @@ if not stockfish_binary.is_file():
     )
 
 
-# Verify final network.
+# ============================================================
+# VERIFY FINAL NNUE
+# ============================================================
 
-final_network =
-    SF_SRC / network_name
+final_network = SF_SRC / network_name
 
 if not final_network.is_file():
     raise SystemExit(
@@ -648,6 +606,7 @@ shutil.copy2(
     SF_OUT
 )
 
+
 print("")
 print("================================================")
 print(" SIMPLELOGICS HYBRID V2 BUILD SUCCESS")
@@ -656,6 +615,7 @@ print("Binary :", SF_OUT)
 print("NNUE   :", network_name)
 print("SHA256 :", final_sha256)
 print("")
+
 ]=])
 
 
