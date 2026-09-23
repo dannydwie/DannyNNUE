@@ -3,13 +3,20 @@ cmake_minimum_required(VERSION 3.20)
 project(SimpleLogics LANGUAGES NONE)
 
 # ============================================================
-# SIMPLELOGICS - STRONG BASE
-# Stockfish search + official compatible NNUE
-# No experimental Hybrid V2 heuristics.
+# SIMPLELOGICS 1.0
+#
+# STRENGTH RESET
+#
+# Official Stockfish development source
+# Official compatible NNUE
+#
+# NO experimental NNUE
+# NO Hybrid V2
+# NO artificial search weakening
 # ============================================================
 
 set(SF_TAG "stockfish-dev-20260922-0a215d6c"
-    CACHE STRING "Stockfish version")
+    CACHE STRING "Stockfish source tag")
 
 set(SF_DIR
     "${CMAKE_BINARY_DIR}/stockfish")
@@ -20,114 +27,54 @@ set(SF_SRC
 set(SF_OUT
     "${CMAKE_BINARY_DIR}/SimpleLogics")
 
-set(SIMPLELOGICS_NNUE
-    "${CMAKE_SOURCE_DIR}/nnue/SimpleLogics-test.nnue")
-
-
-# ============================================================
-# PLATFORM
-# ============================================================
-
-if(ANDROID)
-
-    set(SF_COMP "ndk")
-    set(SF_ARCH "armv8")
-
-else()
-
-    set(SF_COMP "gcc")
-    set(SF_ARCH "x86-64")
-
-endif()
+set(BUILD_SCRIPT
+    "${CMAKE_BINARY_DIR}/build_simplelogics.py")
 
 
 # ============================================================
 # BUILD SCRIPT
 # ============================================================
 
-set(BUILD_SCRIPT
-    "${CMAKE_BINARY_DIR}/build_simplelogics.py")
-
-
 file(WRITE "${BUILD_SCRIPT}" [=[
 
 from pathlib import Path
-import hashlib
 import shutil
 import subprocess
 import sys
 
 
-# ============================================================
-# ARGUMENTS
-# ============================================================
-
-ROOT = Path(sys.argv[1])
-SF_DIR = Path(sys.argv[2])
-SF_SRC = Path(sys.argv[3])
-SF_OUT = Path(sys.argv[4])
-NNUE_SOURCE = Path(sys.argv[5])
-SF_TAG = sys.argv[6]
-SF_ARCH = sys.argv[7]
-SF_COMP = sys.argv[8]
+SF_DIR = Path(sys.argv[1])
+SF_SRC = Path(sys.argv[2])
+SF_OUT = Path(sys.argv[3])
+SF_TAG = sys.argv[4]
+SF_ARCH = sys.argv[5]
+SF_COMP = sys.argv[6]
 
 
 print("")
 print("================================================")
-print(" SIMPLELOGICS STRONG BUILD")
+print(" SIMPLELOGICS 1.0")
+print(" STRENGTH RESET")
 print("================================================")
-print("Stockfish :", SF_TAG)
-print("Arch      :", SF_ARCH)
-print("Compiler  :", SF_COMP)
-print("NNUE      :", NNUE_SOURCE)
+print("Source :", SF_TAG)
+print("Arch   :", SF_ARCH)
+print("Comp   :", SF_COMP)
 print("")
 
 
 # ============================================================
-# CHECK NNUE
-# ============================================================
-
-if not NNUE_SOURCE.is_file():
-
-    raise SystemExit(
-        f"ERROR: NNUE not found: {NNUE_SOURCE}"
-    )
-
-
-size = NNUE_SOURCE.stat().st_size
-
-
-if size < 1_000_000:
-
-    raise SystemExit(
-        f"ERROR: NNUE file too small: {size}"
-    )
-
-
-sha256 = hashlib.sha256(
-    NNUE_SOURCE.read_bytes()
-).hexdigest()
-
-
-network_name = (
-    f"nn-{sha256[:12]}.nnue"
-)
-
-
-print("NNUE size :", size)
-print("NNUE SHA  :", sha256)
-print("Network   :", network_name)
-print("")
-
-
-# ============================================================
-# CLONE STOCKFISH
+# CLEAN
 # ============================================================
 
 if SF_DIR.exists():
-
     shutil.rmtree(SF_DIR)
 
+
+# ============================================================
+# CLONE OFFICIAL STOCKFISH
+# ============================================================
+
+print("Cloning official Stockfish...")
 
 subprocess.run(
     [
@@ -152,197 +99,88 @@ if not SF_SRC.is_dir():
 
 
 # ============================================================
-# INSTALL NNUE
+# DOWNLOAD OFFICIAL NNUE
+#
+# IMPORTANT:
+#
+# We no longer use the small experimental
+# SimpleLogics NNUE.
+#
+# Stockfish downloads the network that is
+# compatible with this exact source.
 # ============================================================
 
-network_path = (
-    SF_SRC / network_name
-)
-
-
-shutil.copy2(
-    NNUE_SOURCE,
-    network_path
-)
-
-
-installed_sha256 = hashlib.sha256(
-    network_path.read_bytes()
-).hexdigest()
-
-
-if installed_sha256 != sha256:
-
-    raise SystemExit(
-        "ERROR: NNUE SHA mismatch."
-    )
-
-
 print("")
-print("NNUE installed:")
-print(network_path)
+print("================================================")
+print(" DOWNLOADING OFFICIAL NNUE")
+print("================================================")
 print("")
 
 
-# ============================================================
-# PATCH DEFAULT NNUE
-# ============================================================
-
-evaluate = (
-    SF_SRC / "evaluate.h"
+subprocess.run(
+    [
+        "make",
+        "-C",
+        str(SF_SRC),
+        "net"
+    ],
+    check=True
 )
 
-s = evaluate.read_text()
+
+nets = sorted(
+    SF_SRC.glob("nn-*.nnue"),
+    key=lambda p: p.stat().st_mtime,
+    reverse=True
+)
 
 
-old_default = None
-
-
-for line in s.splitlines():
-
-    if "#define EvalFileDefaultName" in line:
-
-        old_default = line
-        break
-
-
-if old_default is None:
+if not nets:
 
     raise SystemExit(
-        "ERROR: EvalFileDefaultName not found."
+        "ERROR: Official NNUE was not downloaded."
     )
 
 
-new_default = (
-    f'#define EvalFileDefaultName "{network_name}"'
+official_net = nets[0]
+
+
+print("")
+print("Official NNUE:")
+print(official_net)
+
+print(
+    "Size:",
+    official_net.stat().st_size
 )
 
-
-s = s.replace(
-    old_default,
-    new_default,
-    1
-)
-
-
-evaluate.write_text(s)
+print("")
 
 
 # ============================================================
-# SIMPLELOGICS UCI OPTIONS
+# BRAND ENGINE
 # ============================================================
 
-engine = (
-    SF_SRC / "engine.cpp"
-)
+misc = SF_SRC / "misc.cpp"
 
-s = engine.read_text()
+s = misc.read_text()
 
 
-anchor = (
-    '    options.add("Move Overhead", '
-    'Option(10, 0, 5000));'
-)
-
-
-insert = '''    options.add("Move Overhead", Option(10, 0, 5000));
-
-    options.add(
-      "SimpleLogics Human Mode",
-      Option(false));
-
-    options.add(
-      "SimpleLogics Human Elo",
-      Option(2650, 2501, 2800));'''
-
-
-if anchor in s:
-
-    s = s.replace(
-        anchor,
-        insert,
-        1
-    )
-
-
-engine.write_text(s)
-
-
-# ============================================================
-# HUMAN MODE
-# ============================================================
-
-search = (
-    SF_SRC / "search.cpp"
-)
-
-s = search.read_text()
-
-
-old = '''    Skill   skill =
-      Skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
-
-
-new = '''    Skill   skill =
-      Skill(
-        options["Skill Level"],
-        options["SimpleLogics Human Mode"]
-          ? int(options["SimpleLogics Human Elo"])
-          : (options["UCI_LimitStrength"]
-               ? int(options["UCI_Elo"])
-               : 0));'''
+old = 'ss << "Stockfish " << version'
 
 
 if old in s:
 
     s = s.replace(
         old,
-        new,
-        1
-    )
-
-
-old2 = '''    Skill skill(options["Skill Level"], options["UCI_LimitStrength"] ? int(options["UCI_Elo"]) : 0);'''
-
-
-new2 = '''    Skill skill(
-      options["Skill Level"],
-      options["SimpleLogics Human Mode"]
-        ? int(options["SimpleLogics Human Elo"])
-        : (options["UCI_LimitStrength"]
-             ? int(options["UCI_Elo"])
-             : 0));'''
-
-
-if old2 in s:
-
-    s = s.replace(
-        old2,
-        new2,
-        1
-    )
-
-
-search.write_text(s)
-
-
-# ============================================================
-# BRANDING
-# ============================================================
-
-misc = (
-    SF_SRC / "misc.cpp"
-)
-
-s = misc.read_text()
-
-
-if 'ss << "Stockfish " << version' in s:
-
-    s = s.replace(
-        'ss << "Stockfish " << version',
         'ss << "SimpleLogics " << version',
         1
+    )
+
+else:
+
+    print(
+        "WARNING: branding line not found."
     )
 
 
@@ -355,7 +193,7 @@ misc.write_text(s)
 
 print("")
 print("================================================")
-print(" BUILDING SIMPLELOGICS")
+print(" BUILDING SIMPLELOGICS 1.0")
 print("================================================")
 print("")
 
@@ -378,32 +216,18 @@ subprocess.run(
 # VERIFY
 # ============================================================
 
-binary = (
-    SF_SRC / "stockfish"
-)
+binary = SF_SRC / "stockfish"
 
 
 if not binary.is_file():
 
     raise SystemExit(
-        "ERROR: Engine binary missing."
-    )
-
-
-final_network = (
-    SF_SRC / network_name
-)
-
-
-if not final_network.is_file():
-
-    raise SystemExit(
-        "ERROR: NNUE missing."
+        "ERROR: SimpleLogics binary not produced."
     )
 
 
 # ============================================================
-# COPY ENGINE
+# COPY FINAL ENGINE
 # ============================================================
 
 shutil.copy2(
@@ -414,11 +238,10 @@ shutil.copy2(
 
 print("")
 print("================================================")
-print(" SIMPLELOGICS BUILD SUCCESS")
+print(" SIMPLELOGICS 1.0 BUILD SUCCESS")
 print("================================================")
 print("Binary :", SF_OUT)
-print("NNUE   :", network_name)
-print("SHA256 :", sha256)
+print("NNUE   :", official_net.name)
 print("")
 
 
@@ -426,20 +249,37 @@ print("")
 
 
 # ============================================================
+# PLATFORM
+# ============================================================
+
+if(ANDROID)
+
+    set(SF_ARCH "armv8")
+    set(SF_COMP "ndk")
+
+else()
+
+    set(SF_ARCH "x86-64")
+    set(SF_COMP "gcc")
+
+endif()
+
+
+# ============================================================
 # CMAKE TARGET
 # ============================================================
 
 add_custom_command(
-    OUTPUT "${SF_OUT}"
+
+    OUTPUT
+        "${SF_OUT}"
 
     COMMAND
         python3
         "${BUILD_SCRIPT}"
-        "${CMAKE_SOURCE_DIR}"
         "${SF_DIR}"
         "${SF_SRC}"
         "${SF_OUT}"
-        "${SIMPLELOGICS_NNUE}"
         "${SF_TAG}"
         "${SF_ARCH}"
         "${SF_COMP}"
@@ -449,6 +289,9 @@ add_custom_command(
 
 
 add_custom_target(
+
     SimpleLogics ALL
-    DEPENDS "${SF_OUT}"
+
+    DEPENDS
+        "${SF_OUT}"
 )
