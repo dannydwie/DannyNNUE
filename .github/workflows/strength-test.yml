@@ -1,4 +1,4 @@
-name: SimpleLogics Hybrid V2 Strength Test
+name: SimpleLogics 1.0 Strength Test
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
 
 
       # ============================================================
-      # 2. INSTALL DEPENDENCIES
+      # 2. DEPENDENCIES
       # ============================================================
 
       - name: Install dependencies
@@ -31,10 +31,7 @@ jobs:
             build-essential \
             cmake \
             python3 \
-            python3-pip \
-            wget
-
-          python3 -m pip install --upgrade pip --break-system-packages
+            python3-pip
 
           python3 -m pip install \
             python-chess \
@@ -42,35 +39,31 @@ jobs:
 
 
       # ============================================================
-      # 3. CLONE EXACT STOCKFISH VERSION
+      # 3. EXACT STOCKFISH SOURCE
       # ============================================================
 
-      - name: Clone official Stockfish
+      - name: Clone Stockfish
         run: |
           git clone \
             --depth 1 \
-            --branch stockfish-dev-20260919-17a6c8f1 \
+            --branch stockfish-dev-20260922-0a215d6c \
             https://github.com/official-stockfish/Stockfish.git \
             stockfish-test
 
 
       # ============================================================
-      # 4. DOWNLOAD OFFICIAL NNUE
-      #
-      # This ensures BOTH engines use the SAME NNUE.
-      # Therefore the test focuses on SEARCH differences.
+      # 4. OFFICIAL NNUE
       # ============================================================
 
       - name: Download official NNUE
         working-directory: stockfish-test/src
         run: |
-          echo "Downloading official Stockfish NNUE..."
+
+          echo "=============================================="
+          echo " DOWNLOADING OFFICIAL NNUE"
+          echo "=============================================="
 
           make net
-
-          echo ""
-          echo "NNUE files:"
-          ls -lh nn-*.nnue
 
           NET=$(find . \
             -maxdepth 1 \
@@ -84,55 +77,42 @@ jobs:
           fi
 
           echo ""
-          echo "Using official NNUE:"
+          echo "Official NNUE:"
           echo "$NET"
 
-          cp "$NET" ../../official-stockfish.nnue
+          ls -lh "$NET"
+
+          cp "$NET" ../../official.nnue
 
 
       # ============================================================
       # 5. BUILD OFFICIAL STOCKFISH
       # ============================================================
 
-      - name: Build Stockfish baseline
+      - name: Build Stockfish
         working-directory: stockfish-test/src
         run: |
-          make -j2 build ARCH=x86-64-modern
 
-          if [ ! -f stockfish ]; then
-            echo "ERROR: Stockfish binary not found."
-            exit 1
-          fi
+          make -j2 \
+            build \
+            ARCH=x86-64-modern
 
-          echo ""
-          echo "Stockfish build successful."
-
-          ./stockfish uci | head -n 25
-
-
-      # ============================================================
-      # 6. PREPARE SAME NNUE FOR SIMPLELOGICS
-      # ============================================================
-
-      - name: Prepare shared NNUE
-        run: |
-          mkdir -p nnue
-
-          cp \
-            official-stockfish.nnue \
-            nnue/SimpleLogics-test.nnue
+          test -x stockfish
 
           echo ""
-          echo "Shared NNUE:"
-          ls -lh nnue/SimpleLogics-test.nnue
+          echo "Stockfish build OK."
 
 
       # ============================================================
-      # 7. BUILD SIMPLELOGICS HYBRID V2
+      # 6. BUILD SIMPLELOGICS
+      #
+      # CMakeLists.txt automatically downloads the same official
+      # compatible NNUE for the same Stockfish source.
       # ============================================================
 
-      - name: Build SimpleLogics Hybrid V2
+      - name: Build SimpleLogics
         run: |
+
           rm -rf build
 
           cmake \
@@ -144,267 +124,186 @@ jobs:
             --build build \
             --parallel 2
 
-          echo ""
-          echo "Build output:"
-          find build -type f -perm -111 -print
-
-
-      # ============================================================
-      # 8. LOCATE SIMPLELOGICS
-      # ============================================================
-
-      - name: Prepare SimpleLogics binary
-        run: |
-          SIMPLE=$(find build \
-            -type f \
-            -perm -111 \
-            \( \
-              -name "simplelogics" \
-              -o \
-              -name "SimpleLogics" \
-              -o \
-              -name "stockfish" \
-            \) \
-            | head -n 1)
-
-          if [ -z "$SIMPLE" ]; then
-            echo "ERROR: SimpleLogics binary not found."
-            exit 1
-          fi
-
-          echo "SimpleLogics binary:"
-          echo "$SIMPLE"
-
-          cp "$SIMPLE" ./simplelogics
-
-          chmod +x ./simplelogics
+          test -x build/SimpleLogics
 
           echo ""
-          echo "SimpleLogics UCI:"
-          ./simplelogics uci
+          echo "SimpleLogics build OK."
 
 
       # ============================================================
-      # 9. PREPARE STOCKFISH
+      # 7. PREPARE ENGINES
       # ============================================================
 
-      - name: Prepare Stockfish binary
+      - name: Prepare engines
         run: |
+
           cp \
             stockfish-test/src/stockfish \
             ./stockfish
 
-          chmod +x ./stockfish
+          cp \
+            build/SimpleLogics \
+            ./simplelogics
 
-          echo ""
-          echo "Stockfish UCI:"
-          ./stockfish uci | head -n 25
-
-
-      # ============================================================
-      # 10. VERIFY HYBRID OPTIONS
-      # ============================================================
-
-      - name: Verify Hybrid V2 options
-        run: |
-          echo "=============================================="
-          echo " SIMPLELOGICS HYBRID OPTIONS"
-          echo "=============================================="
-
-          ./simplelogics uci | grep -E \
-            "SimpleLogics|Hybrid|LMR|Human"
+          chmod +x \
+            ./stockfish \
+            ./simplelogics
 
           echo ""
           echo "=============================================="
-          echo " VERIFY STOCKFISH"
+          echo " SIMPLELOGICS UCI"
           echo "=============================================="
 
-          ./stockfish uci | grep -E \
-            "EvalFile|Threads|Hash"
+          printf 'uci\nquit\n' \
+            | ./simplelogics \
+            | head -n 30
+
+          echo ""
+          echo "=============================================="
+          echo " STOCKFISH UCI"
+          echo "=============================================="
+
+          printf 'uci\nquit\n' \
+            | ./stockfish \
+            | head -n 30
 
 
       # ============================================================
-      # 11. BENCHMARK
+      # 8. BENCHMARK
       # ============================================================
 
-      - name: Run benchmark
+      - name: Benchmark
         run: |
+
           echo "=============================================="
           echo " STOCKFISH BENCH"
           echo "=============================================="
 
-          ./stockfish bench \
+          ./stockfish \
+            bench \
             16 \
             1 \
             1 \
             default \
-            depth 10
+            depth 12
 
           echo ""
           echo "=============================================="
-          echo " SIMPLELOGICS HYBRID V2 BENCH"
+          echo " SIMPLELOGICS BENCH"
           echo "=============================================="
 
-          ./simplelogics bench \
+          ./simplelogics \
+            bench \
             16 \
             1 \
             1 \
             default \
-            depth 10
+            depth 12
 
 
       # ============================================================
-      # 12. CREATE TOURNAMENT SCRIPT
+      # 9. 100 GAME STRENGTH TEST
       # ============================================================
 
-      - name: Create tournament script
+      - name: Run 100 game strength test
         run: |
-          cat > tournament.py <<'PYTHON'
+
+          cat > tournament.py <<'PY'
 
           import chess
-          import chess.pgn
           import chess.engine
+          import chess.pgn
           import os
 
 
-          SIMPLELOGICS = os.path.abspath("./simplelogics")
-          STOCKFISH = os.path.abspath("./stockfish")
+          SIMPLE = os.path.abspath("./simplelogics")
+          STOCK = os.path.abspath("./stockfish")
+
 
           GAMES = 100
-          NODES = 10000
-          MAX_PLIES = 180
 
-          RESULTS_DIR = "results"
+          # Higher than previous 10k-node test.
+          NODES = 50000
+
+          MAX_PLIES = 220
+
 
           os.makedirs(
-              RESULTS_DIR,
+              "results",
               exist_ok=True
           )
 
 
-          def configure_engine(engine, simplelogics):
-
-              try:
-                  engine.configure({
-                      "Threads": 1,
-                      "Hash": 32
-                  })
-              except Exception:
-                  pass
+          simple_wins = 0
+          stock_wins = 0
+          draws = 0
 
 
-              if simplelogics:
+          def configure(engine):
 
-                  try:
-                      engine.configure({
-                          "SimpleLogics Human Mode": False
-                      })
-                  except Exception:
-                      pass
+              engine.configure({
+                  "Threads": 1,
+                  "Hash": 64
+              })
 
 
-                  try:
-                      engine.configure({
-                          "SimpleLogics Human Elo": 2650
-                      })
-                  except Exception:
-                      pass
-
-
-                  try:
-                      engine.configure({
-                          "SimpleLogics LMR Boost": True
-                      })
-                  except Exception:
-                      pass
-
-
-                  try:
-                      engine.configure({
-                          "SimpleLogics Hybrid Search": True
-                      })
-                  except Exception:
-                      pass
-
-
-          def play_game(game_number):
+          def play_game(number):
 
               simple_white = (
-                  game_number % 2 == 1
+                  number % 2 == 1
               )
+
+
+              white_path = (
+                  SIMPLE
+                  if simple_white
+                  else STOCK
+              )
+
+
+              black_path = (
+                  STOCK
+                  if simple_white
+                  else SIMPLE
+              )
+
 
               white_name = (
                   "SimpleLogics"
                   if simple_white
-                  else
-                  "Stockfish"
+                  else "Stockfish"
               )
+
 
               black_name = (
                   "Stockfish"
                   if simple_white
-                  else
-                  "SimpleLogics"
-              )
-
-              print(
-                  "",
-                  flush=True
-              )
-
-              print(
-                  f"GAME {game_number}/{GAMES}: "
-                  f"{white_name} WHITE - "
-                  f"{black_name} BLACK",
-                  flush=True
+                  else "SimpleLogics"
               )
 
 
-              white_engine = None
-              black_engine = None
+              white = (
+                  chess.engine
+                  .SimpleEngine
+                  .popen_uci(
+                      white_path
+                  )
+              )
+
+
+              black = (
+                  chess.engine
+                  .SimpleEngine
+                  .popen_uci(
+                      black_path
+                  )
+              )
 
 
               try:
 
-                  white_path = (
-                      SIMPLELOGICS
-                      if simple_white
-                      else STOCKFISH
-                  )
-
-                  black_path = (
-                      STOCKFISH
-                      if simple_white
-                      else SIMPLELOGICS
-                  )
-
-
-                  white_engine = (
-                      chess.engine
-                      .SimpleEngine
-                      .popen_uci(
-                          white_path
-                      )
-                  )
-
-                  black_engine = (
-                      chess.engine
-                      .SimpleEngine
-                      .popen_uci(
-                          black_path
-                      )
-                  )
-
-
-                  configure_engine(
-                      white_engine,
-                      simple_white
-                  )
-
-                  configure_engine(
-                      black_engine,
-                      not simple_white
-                  )
+                  configure(white)
+                  configure(black)
 
 
                   board = chess.Board()
@@ -412,32 +311,34 @@ jobs:
 
                   game = chess.pgn.Game()
 
+
                   game.headers[
                       "Event"
                   ] = (
-                      "SimpleLogics Hybrid V2 "
+                      "SimpleLogics 1.0 "
                       "Strength Test"
                   )
 
-                  game.headers[
-                      "Site"
-                  ] = "GitHub Actions"
 
                   game.headers[
                       "Round"
-                  ] = str(game_number)
+                  ] = str(number)
+
 
                   game.headers[
                       "White"
                   ] = white_name
 
+
                   game.headers[
                       "Black"
                   ] = black_name
 
+
                   game.headers[
                       "NodesPerMove"
                   ] = str(NODES)
+
 
                   node = game
 
@@ -453,390 +354,172 @@ jobs:
 
 
                       engine = (
-                          white_engine
+                          white
                           if board.turn == chess.WHITE
-                          else black_engine
+                          else black
                       )
 
 
-                      try:
-
-                          result = engine.play(
-                              board,
-                              chess.engine.Limit(
-                                  nodes=NODES
-                              )
+                      result = engine.play(
+                          board,
+                          chess.engine.Limit(
+                              nodes=NODES
                           )
-
-                      except Exception as error:
-
-                          print(
-                              "ENGINE ERROR:",
-                              error,
-                              flush=True
-                          )
-
-                          if board.turn == chess.WHITE:
-                              game.headers[
-                                  "Result"
-                              ] = "0-1"
-                          else:
-                              game.headers[
-                                  "Result"
-                              ] = "1-0"
-
-                          game.headers[
-                              "Termination"
-                          ] = "engine error"
-
-                          return game
+                      )
 
 
                       move = result.move
 
 
-                      if (
-                          move is None
-                          or move not in board.legal_moves
-                      ):
-
-                          print(
-                              "ILLEGAL MOVE",
-                              flush=True
+                      node = (
+                          node.add_variation(
+                              move
                           )
-
-                          if board.turn == chess.WHITE:
-                              game.headers[
-                                  "Result"
-                              ] = "0-1"
-                          else:
-                              game.headers[
-                                  "Result"
-                              ] = "1-0"
-
-                          game.headers[
-                              "Termination"
-                          ] = "illegal move"
-
-                          return game
-
-
-                      node = node.add_variation(
-                          move
                       )
+
 
                       board.push(move)
 
 
-                  # =================================================
-                  # RESULT
-                  # =================================================
-
-                  if board.is_checkmate():
-
-                      result = (
-                          "0-1"
-                          if board.turn == chess.WHITE
-                          else "1-0"
-                      )
-
-                      termination = "checkmate"
-
-
-                  elif board.is_stalemate():
-
-                      result = "1/2-1/2"
-                      termination = "stalemate"
-
-
-                  elif board.is_insufficient_material():
-
-                      result = "1/2-1/2"
-                      termination = (
-                          "insufficient material"
-                      )
-
-
-                  elif board.can_claim_fifty_moves():
-
-                      result = "1/2-1/2"
-                      termination = (
-                          "50-move rule"
-                      )
-
-
-                  elif board.can_claim_threefold_repetition():
-
-                      result = "1/2-1/2"
-                      termination = (
-                          "threefold repetition"
-                      )
-
-
-                  else:
-
-                      result = "1/2-1/2"
-                      termination = (
-                          "maximum plies"
-                      )
+                  result = board.result(
+                      claim_draw=True
+                  )
 
 
                   game.headers[
                       "Result"
                   ] = result
 
-                  game.headers[
-                      "Termination"
-                  ] = termination
 
-                  game.headers[
-                      "PlyCount"
-                  ] = str(board.ply())
+                  with open(
+                      f"results/game_{number:03d}.pgn",
+                      "w",
+                      encoding="utf-8"
+                  ) as f:
+
+                      print(
+                          game,
+                          file=f
+                      )
 
 
                   print(
-                      f"RESULT: "
+                      f"GAME {number:03d}/100  "
                       f"{white_name} - "
-                      f"{black_name} = "
-                      f"{result} "
-                      f"({termination})",
+                      f"{black_name}  "
+                      f"{result}",
                       flush=True
                   )
 
 
-                  return game
+                  return (
+                      result,
+                      simple_white
+                  )
 
 
               finally:
 
-                  if white_engine:
-
-                      try:
-                          white_engine.quit()
-                      except Exception:
-                          pass
+                  white.quit()
+                  black.quit()
 
 
-                  if black_engine:
+          # ========================================================
+          # RUN MATCH
+          # ========================================================
 
-                      try:
-                          black_engine.quit()
-                      except Exception:
-                          pass
+          for number in range(
+              1,
+              GAMES + 1
+          ):
 
-
-          def main():
-
-              pgn_path = os.path.join(
-                  RESULTS_DIR,
-                  "hybrid-v2-strength-test.pgn"
+              result, simple_white = (
+                  play_game(number)
               )
 
 
-              simple_wins = 0
-              stockfish_wins = 0
-              draws = 0
+              if result == "1/2-1/2":
+
+                  draws += 1
 
 
-              with open(
-                  pgn_path,
-                  "w",
-                  encoding="utf-8"
-              ) as pgn_file:
+              elif (
+                  result == "1-0"
+                  and simple_white
+              ) or (
+                  result == "0-1"
+                  and not simple_white
+              ):
+
+                  simple_wins += 1
 
 
-                  for game_number in range(
-                      1,
-                      GAMES + 1
-                  ):
+              else:
 
-                      game = play_game(
-                          game_number
-                      )
+                  stock_wins += 1
 
 
-                      result = game.headers.get(
-                          "Result",
-                          "*"
-                      )
+          # ========================================================
+          # FINAL SCORE
+          # ========================================================
 
-
-                      if result == "1/2-1/2":
-
-                          draws += 1
-
-
-                      elif result == "1-0":
-
-                          if (
-                              game.headers[
-                                  "White"
-                              ]
-                              == "SimpleLogics"
-                          ):
-                              simple_wins += 1
-
-                          else:
-                              stockfish_wins += 1
-
-
-                      elif result == "0-1":
-
-                          if (
-                              game.headers[
-                                  "Black"
-                              ]
-                              == "SimpleLogics"
-                          ):
-                              simple_wins += 1
-
-                          else:
-                              stockfish_wins += 1
-
-
-                      exporter = (
-                          chess.pgn.StringExporter(
-                              headers=True,
-                              variations=True,
-                              comments=False
-                          )
-                      )
-
-
-                      pgn_file.write(
-                          game.accept(
-                              exporter
-                          )
-                      )
-
-                      pgn_file.write(
-                          "\n\n"
-                      )
-
-                      pgn_file.flush()
-
-
-                      print(
-                          f"Running score: "
-                          f"SimpleLogics "
-                          f"{simple_wins}, "
-                          f"Stockfish "
-                          f"{stockfish_wins}, "
-                          f"Draws "
-                          f"{draws}",
-                          flush=True
-                      )
-
-
-              score = (
+          score = (
+              (
                   simple_wins
-                  + draws * 0.5
+                  + (0.5 * draws)
               )
+              / GAMES
+              * 100
+          )
 
 
-              percentage = (
-                  100.0
-                  * score
-                  / GAMES
-              )
+          print("")
+          print("")
+          print("==============================================")
+          print(" SIMPLELOGICS 1.0 FINAL RESULT")
+          print("==============================================")
+          print("")
+          print(
+              "SimpleLogics wins :",
+              simple_wins
+          )
+          print(
+              "Stockfish wins    :",
+              stock_wins
+          )
+          print(
+              "Draws             :",
+              draws
+          )
+          print(
+              f"Score             : {score:.1f}%"
+          )
+          print("")
+          print(
+              "Games             :",
+              GAMES
+          )
+          print(
+              "Nodes / move      :",
+              NODES
+          )
+          print("")
+          print("==============================================")
+
+          PY
 
 
-              print("")
-              print(
-                  "================================================"
-              )
-              print(
-                  " SIMPLELOGICS HYBRID V2 RESULT"
-              )
-              print(
-                  "================================================"
-              )
-              print(
-                  f"Games       : {GAMES}"
-              )
-              print(
-                  f"Simple wins : {simple_wins}"
-              )
-              print(
-                  f"Stockfish   : {stockfish_wins}"
-              )
-              print(
-                  f"Draws       : {draws}"
-              )
-              print(
-                  f"Score       : {score:.1f}/{GAMES}"
-              )
-              print(
-                  f"Score %     : {percentage:.1f}%"
-              )
-              print(
-                  "================================================"
-              )
-              print("")
-              print(
-                  "Both engines used the SAME official NNUE."
-              )
-              print(
-                  "SimpleLogics: Hybrid V2 ENABLED"
-              )
-              print(
-                  "Nodes/move  : 10,000"
-              )
-              print(
-                  "Games       : 100"
-              )
-              print(
-                  "================================================"
-              )
-
-
-          if __name__ == "__main__":
-              main()
-
-          PYTHON
-
-          python3 -m py_compile tournament.py
-
-
-      # ============================================================
-      # 13. RUN 100 GAMES
-      # ============================================================
-
-      - name: Run 100 game Hybrid V2 test
-        run: |
           python3 tournament.py
 
 
       # ============================================================
-      # 14. SHOW RESULT
+      # 10. UPLOAD RESULTS
       # ============================================================
 
-      - name: Show final result
-        run: |
-          echo ""
-          echo "================================================"
-          echo " FINAL HYBRID V2 RESULT"
-          echo "================================================"
-
-          ls -lh results/
-
-          echo ""
-
-          echo "PGN:"
-          wc -l \
-            results/hybrid-v2-strength-test.pgn
-
-          echo ""
-          echo "================================================"
-
-
-      # ============================================================
-      # 15. UPLOAD PGN
-      # ============================================================
-
-      - name: Upload Hybrid V2 PGN
+      - name: Upload PGN results
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-Hybrid-V2-Strength-Test
-          path: results/hybrid-v2-strength-test.pgn
-          retention-days: 14
+          name: SimpleLogics-1.0-strength-results
+          path: results/
+          if-no-files-found: error
+          retention-days: 30
