@@ -2,8 +2,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -11,2046 +12,1737 @@
 
 using namespace std;
 
-// ============================================================
-// SIMPLELOGICS PUCT ENGINE
-// ============================================================
+static constexpr int INF=32000;
+static constexpr int MATE=30000;
+static constexpr int MAX_PLY=128;
 
-enum Piece : int {
-    EMPTY = 0,
-    WP = 1, WN = 2, WB = 3, WR = 4, WQ = 5, WK = 6,
-    BP = -1, BN = -2, BB = -3, BR = -4, BQ = -5, BK = -6
+enum Piece:int{
+    EMPTY=0,
+    WP=1,WN=2,WB=3,WR=4,WQ=5,WK=6,
+    BP=-1,BN=-2,BB=-3,BR=-4,BQ=-5,BK=-6
 };
 
-enum Flag : uint8_t {
-    QUIET = 0,
-    CAPTURE = 1,
-    DOUBLE_PUSH = 2,
-    EP_CAPTURE = 4,
-    KING_CASTLE = 8,
-    QUEEN_CASTLE = 16,
-    PROMOTION = 32
+static inline bool white(int p){return p>0;}
+static inline int absPiece(int p){return p<0?-p:p;}
+static inline int fileOf(int s){return s&7;}
+static inline int rankOf(int s){return s>>3;}
+static inline int sq(int f,int r){return r*8+f;}
+
+struct Move{
+    uint8_t from=0,to=0,piece=0,capture=0,promo=0,flags=0;
+    int score=0;
+
+    bool operator==(const Move&o)const{
+        return from==o.from&&to==o.to&&promo==o.promo;
+    }
 };
 
-struct Move {
-    uint8_t from = 0;
-    uint8_t to = 0;
-    int8_t promotion = 0;
-    uint8_t flags = QUIET;
+static constexpr uint8_t EP=1;
+static constexpr uint8_t CASTLE=2;
+static constexpr uint8_t DOUBLE_PUSH=4;
+
+struct State{
+    int captured=0;
+    int oldEp=-1;
+    int oldCastle=0;
+    int oldHalfmove=0;
+    int oldFullmove=1;
 };
 
-static bool sameMove(const Move& a, const Move& b) {
-    return a.from == b.from &&
-           a.to == b.to &&
-           a.promotion == b.promotion;
-}
+struct Board{
+    array<int,64>b{};
+    bool whiteTurn=true;
+    int ep=-1;
+    int castle=15;
+    int halfmove=0;
+    int fullmove=1;
+    uint64_t key=0;
 
-// ============================================================
-// BOARD
-// ============================================================
+    void clear(){
+        b.fill(0);
+        whiteTurn=true;
+        ep=-1;
+        castle=15;
+        halfmove=0;
+        fullmove=1;
+        key=0;
+    }
 
-struct Board {
-    array<int, 64> board{};
-    bool white = true;
-    uint8_t castle = 15;
-    int ep = -1;
-    int halfmove = 0;
-    int fullmove = 1;
+    static Board start(){
+        Board x;
+        x.clear();
 
-    static Board startpos() {
-        Board b;
-        b.board.fill(EMPTY);
+        const string back="RNBQKBNR";
 
-        const int back[8] = {
-            WR, WN, WB, WQ, WK, WB, WN, WR
+        for(int f=0;f<8;f++){
+            int p=
+                back[f]=='R'?WR:
+                back[f]=='N'?WN:
+                back[f]=='B'?WB:
+                back[f]=='Q'?WQ:
+                WK;
+
+            x.b[sq(f,0)]=p;
+            x.b[sq(f,1)]=WP;
+            x.b[sq(f,6)]=-WP;
+            x.b[sq(f,7)]=-p;
+        }
+
+        x.rehash();
+        return x;
+    }
+
+    bool fromFEN(const string&fen){
+        clear();
+
+        string p,stm,cas,eps;
+        int hm=0,fm=1;
+
+        stringstream ss(fen);
+
+        if(!(ss>>p>>stm>>cas>>eps>>hm>>fm))
+            return false;
+
+        int r=7;
+        int f=0;
+
+        for(char c:p){
+            if(c=='/'){
+                if(f!=8)return false;
+                f=0;
+                --r;
+                continue;
+            }
+
+            if(isdigit((unsigned char)c)){
+                f+=c-'0';
+                continue;
+            }
+
+            if(r<0||f>7)
+                return false;
+
+            int q=0;
+
+            switch(c){
+                case 'P':q=WP;break;
+                case 'N':q=WN;break;
+                case 'B':q=WB;break;
+                case 'R':q=WR;break;
+                case 'Q':q=WQ;break;
+                case 'K':q=WK;break;
+                case 'p':q=BP;break;
+                case 'n':q=BN;break;
+                case 'b':q=BB;break;
+                case 'r':q=BR;break;
+                case 'q':q=BQ;break;
+                case 'k':q=BK;break;
+                default:return false;
+            }
+
+            b[sq(f,r)]=q;
+            ++f;
+        }
+
+        if(r!=0||f!=8)
+            return false;
+
+        whiteTurn=(stm!="b");
+
+        castle=0;
+
+        if(cas.find('K')!=string::npos)castle|=1;
+        if(cas.find('Q')!=string::npos)castle|=2;
+        if(cas.find('k')!=string::npos)castle|=4;
+        if(cas.find('q')!=string::npos)castle|=8;
+
+        ep=-1;
+
+        if(eps!="-"){
+            if(eps.size()!=2)
+                return false;
+
+            int ef=eps[0]-'a';
+            int er=eps[1]-'1';
+
+            if(ef<0||ef>7||er<0||er>7)
+                return false;
+
+            ep=sq(ef,er);
+        }
+
+        halfmove=max(0,hm);
+        fullmove=max(1,fm);
+
+        rehash();
+        return true;
+    }
+
+    uint64_t hash64()const{
+        uint64_t h=0x9e3779b97f4a7c15ULL;
+
+        auto mix=[&](uint64_t v){
+            h^=v+
+               0x9e3779b97f4a7c15ULL+
+               (h<<6)+(h>>2);
         };
 
-        for (int i = 0; i < 8; ++i) {
-            b.board[i] = back[i];
-            b.board[8 + i] = WP;
-            b.board[48 + i] = BP;
-            b.board[56 + i] = -back[i];
-        }
-
-        return b;
-    }
-};
-
-static inline int fileOf(int s) {
-    return s & 7;
-}
-
-static inline int rankOf(int s) {
-    return s >> 3;
-}
-
-static inline bool inside(int f, int r) {
-    return f >= 0 && f < 8 && r >= 0 && r < 8;
-}
-
-static inline bool ownPiece(int p, bool white) {
-    return white ? p > 0 : p < 0;
-}
-
-static inline int pieceValue(int p) {
-    switch (abs(p)) {
-        case 1: return 100;
-        case 2: return 320;
-        case 3: return 335;
-        case 4: return 500;
-        case 5: return 900;
-        case 6: return 20000;
-        default: return 0;
-    }
-}
-
-static string squareName(int s) {
-    string r = "a1";
-    r[0] = char('a' + fileOf(s));
-    r[1] = char('1' + rankOf(s));
-    return r;
-}
-
-static string uciMove(const Move& m) {
-    string r =
-        squareName(m.from) +
-        squareName(m.to);
-
-    if (m.promotion) {
-        switch (abs((int)m.promotion)) {
-            case 5: r += 'q'; break;
-            case 4: r += 'r'; break;
-            case 3: r += 'b'; break;
-            case 2: r += 'n'; break;
-        }
-    }
-
-    return r;
-}
-
-// ============================================================
-// ATTACK DETECTION
-// ============================================================
-
-static int kingSquare(
-    const Board& b,
-    bool white
-) {
-    int king = white ? WK : BK;
-
-    for (int s = 0; s < 64; ++s) {
-        if (b.board[s] == king)
-            return s;
-    }
-
-    return -1;
-}
-
-static bool attacked(
-    const Board& b,
-    int square,
-    bool byWhite
-) {
-    int f = fileOf(square);
-    int r = rankOf(square);
-
-    // Pawns
-    int pawnRank =
-        byWhite ? r - 1 : r + 1;
-
-    if (pawnRank >= 0 && pawnRank < 8) {
-        for (int df : {-1, 1}) {
-            int nf = f + df;
-
-            if (!inside(nf, pawnRank))
-                continue;
-
-            int p =
-                b.board[pawnRank * 8 + nf];
-
-            if (p == (byWhite ? WP : BP))
-                return true;
-        }
-    }
-
-    // Knights
-    static const int knight[8][2] = {
-        {1,2}, {2,1}, {2,-1}, {1,-2},
-        {-1,-2}, {-2,-1}, {-2,1}, {-1,2}
-    };
-
-    for (auto& d : knight) {
-        int nf = f + d[0];
-        int nr = r + d[1];
-
-        if (!inside(nf, nr))
-            continue;
-
-        if (b.board[nr * 8 + nf] ==
-            (byWhite ? WN : BN))
-            return true;
-    }
-
-    // Bishops / Queens
-    static const int diagonal[4][2] = {
-        {1,1}, {1,-1}, {-1,1}, {-1,-1}
-    };
-
-    for (auto& d : diagonal) {
-        int nf = f;
-        int nr = r;
-
-        while (true) {
-            nf += d[0];
-            nr += d[1];
-
-            if (!inside(nf, nr))
-                break;
-
-            int p =
-                b.board[nr * 8 + nf];
-
-            if (p) {
-                if (p == (byWhite ? WB : BB) ||
-                    p == (byWhite ? WQ : BQ))
-                    return true;
-
-                break;
+        for(int i=0;i<64;i++){
+            if(b[i]){
+                mix(
+                    (uint64_t)(b[i]+7)*
+                    0x9e3779b97f4a7c15ULL ^
+                    (uint64_t)(i+1)*
+                    0xbf58476d1ce4e5b9ULL
+                );
             }
         }
+
+        mix((uint64_t)whiteTurn);
+        mix((uint64_t)castle+17);
+        mix((uint64_t)(ep+2)*
+            0x94d049bb133111ebULL);
+
+        return h;
     }
 
-    // Rooks / Queens
-    static const int straight[4][2] = {
-        {1,0}, {-1,0}, {0,1}, {0,-1}
-    };
-
-    for (auto& d : straight) {
-        int nf = f;
-        int nr = r;
-
-        while (true) {
-            nf += d[0];
-            nr += d[1];
-
-            if (!inside(nf, nr))
-                break;
-
-            int p =
-                b.board[nr * 8 + nf];
-
-            if (p) {
-                if (p == (byWhite ? WR : BR) ||
-                    p == (byWhite ? WQ : BQ))
-                    return true;
-
-                break;
-            }
-        }
+    void rehash(){
+        key=hash64();
     }
 
-    // King
-    for (int df = -1; df <= 1; ++df) {
-        for (int dr = -1; dr <= 1; ++dr) {
+    bool attacked(int s,bool byWhite)const{
+        int f=fileOf(s);
+        int r=rankOf(s);
 
-            if (!df && !dr)
-                continue;
+        int pawn=byWhite?WP:BP;
+        int pr=byWhite?r-1:r+1;
 
-            int nf = f + df;
-            int nr = r + dr;
+        if(pr>=0&&pr<8){
+            if(f>0&&b[sq(f-1,pr)]==pawn)
+                return true;
 
-            if (!inside(nf, nr))
-                continue;
-
-            if (b.board[nr * 8 + nf] ==
-                (byWhite ? WK : BK))
+            if(f<7&&b[sq(f+1,pr)]==pawn)
                 return true;
         }
+
+        static const int kdf[8]=
+            {1,2,2,1,-1,-2,-2,-1};
+
+        static const int kdr[8]=
+            {2,1,-1,-2,-2,-1,1,2};
+
+        int kn=byWhite?WN:BN;
+
+        for(int i=0;i<8;i++){
+            int nf=f+kdf[i];
+            int nr=r+kdr[i];
+
+            if(nf>=0&&nf<8&&nr>=0&&nr<8){
+                if(b[sq(nf,nr)]==kn)
+                    return true;
+            }
+        }
+
+        static const int df[4]={1,1,-1,-1};
+        static const int dr[4]={1,-1,1,-1};
+
+        int bishop=byWhite?WB:BB;
+        int queen=byWhite?WQ:BQ;
+
+        for(int d=0;d<4;d++){
+            int nf=f+df[d];
+            int nr=r+dr[d];
+
+            while(nf>=0&&nf<8&&nr>=0&&nr<8){
+                int p=b[sq(nf,nr)];
+
+                if(p){
+                    if(p==bishop||p==queen)
+                        return true;
+                    break;
+                }
+
+                nf+=df[d];
+                nr+=dr[d];
+            }
+        }
+
+        static const int rf[4]={1,-1,0,0};
+        static const int rr[4]={0,0,1,-1};
+
+        int rook=byWhite?WR:BR;
+
+        for(int d=0;d<4;d++){
+            int nf=f+rf[d];
+            int nr=r+rr[d];
+
+            while(nf>=0&&nf<8&&nr>=0&&nr<8){
+                int p=b[sq(nf,nr)];
+
+                if(p){
+                    if(p==rook||p==queen)
+                        return true;
+                    break;
+                }
+
+                nf+=rf[d];
+                nr+=rr[d];
+            }
+        }
+
+        int king=byWhite?WK:BK;
+
+        for(int df0=-1;df0<=1;df0++){
+            for(int dr0=-1;dr0<=1;dr0++){
+                if(!df0&&!dr0)
+                    continue;
+
+                int nf=f+df0;
+                int nr=r+dr0;
+
+                if(nf>=0&&nf<8&&nr>=0&&nr<8){
+                    if(b[sq(nf,nr)]==king)
+                        return true;
+                }
+            }
+        }
+
+        return false;
     }
 
-    return false;
-}
+    bool inCheck(bool side)const{
+        int k=side?WK:BK;
 
-static bool inCheck(
-    const Board& b,
-    bool white
-) {
-    int k = kingSquare(b, white);
+        for(int i=0;i<64;i++){
+            if(b[i]==k)
+                return attacked(i,!side);
+        }
 
-    if (k < 0)
         return true;
+    }
 
-    return attacked(b, k, !white);
-}
+    void add(
+        vector<Move>&mv,
+        int from,
+        int to,
+        int promo=0,
+        uint8_t flags=0
+    )const{
+        Move m;
 
-// ============================================================
-// MOVE GENERATION
-// ============================================================
+        m.from=from;
+        m.to=to;
+        m.piece=(uint8_t)b[from];
+        m.capture=(uint8_t)b[to];
+        m.promo=(uint8_t)promo;
+        m.flags=flags;
 
-static void addMove(
-    vector<Move>& moves,
-    int from,
-    int to,
-    uint8_t flags = QUIET,
-    int promotion = 0
-) {
-    moves.push_back(
-        Move{
-            (uint8_t)from,
-            (uint8_t)to,
-            (int8_t)promotion,
-            flags
-        }
-    );
-}
+        mv.push_back(m);
+    }
 
-static void generatePseudo(
-    const Board& b,
-    vector<Move>& moves
-) {
-    moves.clear();
+    vector<Move>pseudo(bool capturesOnly=false)const{
+        vector<Move>mv;
+        mv.reserve(64);
 
-    bool white = b.white;
+        bool side=whiteTurn;
 
-    for (int s = 0; s < 64; ++s) {
+        for(int from=0;from<64;from++){
+            int p=b[from];
 
-        int p = b.board[s];
-
-        if (!ownPiece(p, white))
-            continue;
-
-        int f = fileOf(s);
-        int r = rankOf(s);
-        int type = abs(p);
-
-        // PAWN
-        if (type == 1) {
-
-            int dir = white ? 1 : -1;
-            int nr = r + dir;
-
-            if (!inside(f, nr))
+            if(!p||white(p)!=side)
                 continue;
 
-            int to = nr * 8 + f;
+            int f=fileOf(from);
+            int r=rankOf(from);
+            int ap=absPiece(p);
 
-            if (b.board[to] == EMPTY) {
+            if(ap==1){
+                int dir=side?1:-1;
+                int start=side?1:6;
+                int promoR=side?7:0;
+                int nr=r+dir;
 
-                if (nr == 0 || nr == 7) {
+                if(!capturesOnly&&
+                   nr>=0&&nr<8&&
+                   b[sq(f,nr)]==0){
 
-                    int promos[4] = {
-                        white ? WQ : BQ,
-                        white ? WR : BR,
-                        white ? WB : BB,
-                        white ? WN : BN
-                    };
+                    if(nr==promoR){
+                        add(mv,from,sq(f,nr),side?WQ:BQ);
+                        add(mv,from,sq(f,nr),side?WR:BR);
+                        add(mv,from,sq(f,nr),side?WB:BB);
+                        add(mv,from,sq(f,nr),side?WN:BN);
+                    }else{
+                        add(mv,from,sq(f,nr));
 
-                    for (int q : promos)
-                        addMove(
-                            moves,
-                            s,
-                            to,
-                            PROMOTION,
-                            q
-                        );
+                        if(r==start&&
+                           b[sq(f,r+2*dir)]==0){
 
-                } else {
-                    addMove(
-                        moves,
-                        s,
-                        to
-                    );
-                }
-
-                int startRank =
-                    white ? 1 : 6;
-
-                int nr2 =
-                    r + dir * 2;
-
-                if (
-                    r == startRank &&
-                    b.board[nr2 * 8 + f] == EMPTY
-                ) {
-                    addMove(
-                        moves,
-                        s,
-                        nr2 * 8 + f,
-                        DOUBLE_PUSH
-                    );
-                }
-            }
-
-            for (int df : {-1, 1}) {
-
-                int nf = f + df;
-
-                if (!inside(nf, nr))
-                    continue;
-
-                to = nr * 8 + nf;
-
-                if (
-                    b.board[to] != EMPTY &&
-                    !ownPiece(b.board[to], white) &&
-                    abs(b.board[to]) != 6
-                ) {
-
-                    if (nr == 0 || nr == 7) {
-
-                        int promos[4] = {
-                            white ? WQ : BQ,
-                            white ? WR : BR,
-                            white ? WB : BB,
-                            white ? WN : BN
-                        };
-
-                        for (int q : promos)
-                            addMove(
-                                moves,
-                                s,
-                                to,
-                                CAPTURE | PROMOTION,
-                                q
-                            );
-
-                    } else {
-                        addMove(
-                            moves,
-                            s,
-                            to,
-                            CAPTURE
-                        );
-                    }
-                }
-
-                if (to == b.ep) {
-                    addMove(
-                        moves,
-                        s,
-                        to,
-                        EP_CAPTURE
-                    );
-                }
-            }
-        }
-
-        // KNIGHT
-        else if (type == 2) {
-
-            static const int d[8][2] = {
-                {1,2}, {2,1}, {2,-1}, {1,-2},
-                {-1,-2}, {-2,-1}, {-2,1}, {-1,2}
-            };
-
-            for (auto& z : d) {
-
-                int nf = f + z[0];
-                int nr = r + z[1];
-
-                if (!inside(nf, nr))
-                    continue;
-
-                int to =
-                    nr * 8 + nf;
-
-                if (
-                    !ownPiece(
-                        b.board[to],
-                        white
-                    ) &&
-                    abs(b.board[to]) != 6
-                ) {
-
-                    addMove(
-                        moves,
-                        s,
-                        to,
-                        b.board[to]
-                            ? CAPTURE
-                            : QUIET
-                    );
-                }
-            }
-        }
-
-        // BISHOP / ROOK / QUEEN
-        else if (
-            type == 3 ||
-            type == 4 ||
-            type == 5
-        ) {
-
-            static const int dirs[8][2] = {
-                {1,1}, {1,-1}, {-1,1}, {-1,-1},
-                {1,0}, {-1,0}, {0,1}, {0,-1}
-            };
-
-            int first =
-                type == 4 ? 4 : 0;
-
-            int last =
-                type == 3 ? 4 : 8;
-
-            for (int d = first; d < last; ++d) {
-
-                int nf = f;
-                int nr = r;
-
-                while (true) {
-
-                    nf += dirs[d][0];
-                    nr += dirs[d][1];
-
-                    if (!inside(nf, nr))
-                        break;
-
-                    int to =
-                        nr * 8 + nf;
-
-                    if (b.board[to] == EMPTY) {
-
-                        addMove(
-                            moves,
-                            s,
-                            to
-                        );
-
-                    } else {
-
-                        if (
-                            !ownPiece(
-                                b.board[to],
-                                white
-                            ) &&
-                            abs(b.board[to]) != 6
-                        ) {
-                            addMove(
-                                moves,
-                                s,
-                                to,
-                                CAPTURE
+                            add(
+                                mv,
+                                from,
+                                sq(f,r+2*dir),
+                                0,
+                                DOUBLE_PUSH
                             );
                         }
+                    }
+                }
 
-                        break;
+                for(int df:{-1,1}){
+                    int nf=f+df;
+
+                    if(nf<0||nf>7||nr<0||nr>7)
+                        continue;
+
+                    int to=sq(nf,nr);
+
+                    if(b[to]&&white(b[to])!=side){
+                        if(nr==promoR){
+                            add(mv,from,to,side?WQ:BQ);
+                            add(mv,from,to,side?WR:BR);
+                            add(mv,from,to,side?WB:BB);
+                            add(mv,from,to,side?WN:BN);
+                        }else{
+                            add(mv,from,to);
+                        }
+                    }else if(to==ep){
+                        add(mv,from,to,0,EP);
+                    }
+                }
+            }
+
+            else if(ap==2){
+                static const int df[8]=
+                    {1,2,2,1,-1,-2,-2,-1};
+
+                static const int dr[8]=
+                    {2,1,-1,-2,-2,-1,1,2};
+
+                for(int i=0;i<8;i++){
+                    int nf=f+df[i];
+                    int nr=r+dr[i];
+
+                    if(nf<0||nf>7||nr<0||nr>7)
+                        continue;
+
+                    int to=sq(nf,nr);
+
+                    if(!b[to]||white(b[to])!=side){
+                        if(!capturesOnly||b[to])
+                            add(mv,from,to);
+                    }
+                }
+            }
+
+            else if(ap==3||ap==4||ap==5){
+                static const int bdf[4]={1,1,-1,-1};
+                static const int bdr[4]={1,-1,1,-1};
+
+                static const int rdf[4]={1,-1,0,0};
+                static const int rdr[4]={0,0,1,-1};
+
+                int begin=ap==3?0:ap==4?4:0;
+                int end=ap==3?4:ap==4?8:8;
+
+                for(int d=begin;d<end;d++){
+                    int nf=
+                        f+(d<4?bdf[d]:rdf[d-4]);
+
+                    int nr=
+                        r+(d<4?bdr[d]:rdr[d-4]);
+
+                    while(nf>=0&&nf<8&&nr>=0&&nr<8){
+                        int to=sq(nf,nr);
+
+                        if(!b[to]){
+                            if(!capturesOnly)
+                                add(mv,from,to);
+                        }else{
+                            if(white(b[to])!=side)
+                                add(mv,from,to);
+                            break;
+                        }
+
+                        nf+=(d<4?bdf[d]:rdf[d-4]);
+                        nr+=(d<4?bdr[d]:rdr[d-4]);
+                    }
+                }
+            }
+
+            else if(ap==6){
+                for(int df=-1;df<=1;df++){
+                    for(int dr=-1;dr<=1;dr++){
+                        if(!df&&!dr)
+                            continue;
+
+                        int nf=f+df;
+                        int nr=r+dr;
+
+                        if(nf<0||nf>7||nr<0||nr>7)
+                            continue;
+
+                        int to=sq(nf,nr);
+
+                        if(
+                            (!b[to]||white(b[to])!=side)&&
+                            (!capturesOnly||b[to])
+                        ){
+                            add(mv,from,to);
+                        }
+                    }
+                }
+
+                if(!capturesOnly){
+                    if(side&&from==4&&!inCheck(true)){
+                        if(
+                            (castle&1)&&
+                            b[5]==0&&b[6]==0&&
+                            !attacked(5,false)&&
+                            !attacked(6,false)
+                        ){
+                            add(mv,4,6,0,CASTLE);
+                        }
+
+                        if(
+                            (castle&2)&&
+                            b[1]==0&&b[2]==0&&b[3]==0&&
+                            !attacked(3,false)&&
+                            !attacked(2,false)
+                        ){
+                            add(mv,4,2,0,CASTLE);
+                        }
+                    }
+
+                    if(!side&&from==60&&!inCheck(false)){
+                        if(
+                            (castle&4)&&
+                            b[61]==0&&b[62]==0&&
+                            !attacked(61,true)&&
+                            !attacked(62,true)
+                        ){
+                            add(mv,60,62,0,CASTLE);
+                        }
+
+                        if(
+                            (castle&8)&&
+                            b[57]==0&&b[58]==0&&b[59]==0&&
+                            !attacked(59,true)&&
+                            !attacked(58,true)
+                        ){
+                            add(mv,60,58,0,CASTLE);
+                        }
                     }
                 }
             }
         }
 
-        // KING
-        else if (type == 6) {
+        return mv;
+    }
 
-            for (int df = -1; df <= 1; ++df) {
-                for (int dr = -1; dr <= 1; ++dr) {
+    bool make(const Move&m,State&st){
+        st.captured=b[m.to];
+        st.oldEp=ep;
+        st.oldCastle=castle;
+        st.oldHalfmove=halfmove;
+        st.oldFullmove=fullmove;
 
-                    if (!df && !dr)
-                        continue;
+        int p=b[m.from];
 
-                    int nf = f + df;
-                    int nr = r + dr;
+        b[m.to]=p;
+        b[m.from]=0;
 
-                    if (!inside(nf, nr))
-                        continue;
+        if(m.flags&EP){
+            int cs=whiteTurn?m.to-8:m.to+8;
+            st.captured=b[cs];
+            b[cs]=0;
+        }
 
-                    int to =
-                        nr * 8 + nf;
+        if(m.promo)
+            b[m.to]=whiteTurn?m.promo:-m.promo;
 
-                    if (
-                        !ownPiece(
-                            b.board[to],
-                            white
-                        ) &&
-                        abs(b.board[to]) != 6
-                    ) {
-                        addMove(
-                            moves,
-                            s,
-                            to,
-                            b.board[to]
-                                ? CAPTURE
-                                : QUIET
-                        );
-                    }
-                }
-            }
-
-            // WHITE CASTLING
-            if (
-                white &&
-                s == 4 &&
-                !inCheck(b, true)
-            ) {
-
-                if (
-                    (b.castle & 1) &&
-                    b.board[5] == EMPTY &&
-                    b.board[6] == EMPTY &&
-                    b.board[7] == WR &&
-                    !attacked(b, 5, false) &&
-                    !attacked(b, 6, false)
-                ) {
-                    addMove(
-                        moves,
-                        4,
-                        6,
-                        KING_CASTLE
-                    );
-                }
-
-                if (
-                    (b.castle & 2) &&
-                    b.board[1] == EMPTY &&
-                    b.board[2] == EMPTY &&
-                    b.board[3] == EMPTY &&
-                    b.board[0] == WR &&
-                    !attacked(b, 3, false) &&
-                    !attacked(b, 2, false)
-                ) {
-                    addMove(
-                        moves,
-                        4,
-                        2,
-                        QUEEN_CASTLE
-                    );
-                }
-            }
-
-            // BLACK CASTLING
-            if (
-                !white &&
-                s == 60 &&
-                !inCheck(b, false)
-            ) {
-
-                if (
-                    (b.castle & 4) &&
-                    b.board[61] == EMPTY &&
-                    b.board[62] == EMPTY &&
-                    b.board[63] == BR &&
-                    !attacked(b, 61, true) &&
-                    !attacked(b, 62, true)
-                ) {
-                    addMove(
-                        moves,
-                        60,
-                        62,
-                        KING_CASTLE
-                    );
-                }
-
-                if (
-                    (b.castle & 8) &&
-                    b.board[57] == EMPTY &&
-                    b.board[58] == EMPTY &&
-                    b.board[59] == EMPTY &&
-                    b.board[56] == BR &&
-                    !attacked(b, 59, true) &&
-                    !attacked(b, 58, true)
-                ) {
-                    addMove(
-                        moves,
-                        60,
-                        58,
-                        QUEEN_CASTLE
-                    );
-                }
+        if(m.flags&CASTLE){
+            if(m.to==6){
+                b[5]=b[7];
+                b[7]=0;
+            }else if(m.to==2){
+                b[3]=b[0];
+                b[0]=0;
+            }else if(m.to==62){
+                b[61]=b[63];
+                b[63]=0;
+            }else if(m.to==58){
+                b[59]=b[56];
+                b[56]=0;
             }
         }
-    }
-}
 
-// ============================================================
-// MAKE MOVE
-// ============================================================
+        ep=-1;
 
-static Board makeMove(
-    const Board& b,
-    const Move& m
-) {
-    Board n = b;
+        if(m.flags&DOUBLE_PUSH)
+            ep=whiteTurn?m.from+8:m.from-8;
 
-    int piece =
-        n.board[m.from];
-
-    int captured =
-        n.board[m.to];
-
-    n.board[m.from] = EMPTY;
-    n.board[m.to] = piece;
-
-    n.ep = -1;
-    n.halfmove++;
-
-    if (
-        abs(piece) == 1 ||
-        captured ||
-        (m.flags & EP_CAPTURE)
-    ) {
-        n.halfmove = 0;
-    }
-
-    if (m.flags & EP_CAPTURE) {
-
-        n.board[
-            m.to + (b.white ? -8 : 8)
-        ] = EMPTY;
-    }
-
-    if (m.flags & KING_CASTLE) {
-
-        if (b.white) {
-            n.board[5] = WR;
-            n.board[7] = EMPTY;
-        } else {
-            n.board[61] = BR;
-            n.board[63] = EMPTY;
-        }
-    }
-
-    if (m.flags & QUEEN_CASTLE) {
-
-        if (b.white) {
-            n.board[3] = WR;
-            n.board[0] = EMPTY;
-        } else {
-            n.board[59] = BR;
-            n.board[56] = EMPTY;
-        }
-    }
-
-    if (m.promotion)
-        n.board[m.to] = m.promotion;
-
-    if (m.flags & DOUBLE_PUSH) {
-        n.ep =
-            m.from +
-            (b.white ? 8 : -8);
-    }
-
-    if (piece == WK)
-        n.castle &= ~3;
-
-    if (piece == BK)
-        n.castle &= ~12;
-
-    if (m.from == 0 || m.to == 0)
-        n.castle &= ~2;
-
-    if (m.from == 7 || m.to == 7)
-        n.castle &= ~1;
-
-    if (m.from == 56 || m.to == 56)
-        n.castle &= ~8;
-
-    if (m.from == 63 || m.to == 63)
-        n.castle &= ~4;
-
-    n.white = !b.white;
-
-    if (n.white)
-        n.fullmove++;
-
-    return n;
-}
-
-// ============================================================
-// LEGAL MOVES
-// ============================================================
-
-static vector<Move> legalMoves(
-    const Board& b
-) {
-    vector<Move> pseudo;
-    vector<Move> legal;
-
-    generatePseudo(
-        b,
-        pseudo
-    );
-
-    legal.reserve(
-        pseudo.size()
-    );
-
-    for (const Move& m : pseudo) {
-
-        Board n =
-            makeMove(b, m);
-
-        if (!inCheck(n, b.white))
-            legal.push_back(m);
-    }
-
-    return legal;
-}
-
-// ============================================================
-// SIMPLELOGICS EVALUATION
-// ============================================================
-
-static int centerBonus(int s) {
-
-    int f = fileOf(s);
-    int r = rankOf(s);
-
-    int distance =
-        abs(f - 3) +
-        abs(r - 3);
-
-    return 14 -
-           distance * 3;
-}
-
-static int evaluate(
-    const Board& b
-) {
-    int score = 0;
-
-    int whiteMaterial = 0;
-    int blackMaterial = 0;
-
-    int whiteBishops = 0;
-    int blackBishops = 0;
-
-    for (int s = 0; s < 64; ++s) {
-
-        int p = b.board[s];
-
-        if (!p)
-            continue;
-
-        int type = abs(p);
-        int value = pieceValue(p);
-
-        if (p > 0)
-            whiteMaterial += value;
+        if(absPiece(p)==1||st.captured)
+            halfmove=0;
         else
-            blackMaterial += value;
+            halfmove++;
 
-        int bonus = 0;
+        if(!whiteTurn)
+            fullmove++;
 
-        // Pawn structure / advancement
-        if (type == 1) {
+        if(p==WK)castle&=~3;
+        if(p==BK)castle&=~12;
 
-            int advance =
-                p > 0
-                ? rankOf(s)
-                : 7 - rankOf(s);
+        if(m.from==0||m.to==0)castle&=~2;
+        if(m.from==7||m.to==7)castle&=~1;
+        if(m.from==56||m.to==56)castle&=~8;
+        if(m.from==63||m.to==63)castle&=~4;
 
-            bonus =
-                advance * 6;
-        }
+        whiteTurn=!whiteTurn;
+        rehash();
 
-        // Knights / bishops
-        else if (
-            type == 2 ||
-            type == 3
-        ) {
-            bonus =
-                centerBonus(s) / 2;
-        }
-
-        // Rook
-        else if (type == 4) {
-
-            int rr =
-                rankOf(s);
-
-            if (rr == 1 || rr == 6)
-                bonus += 10;
-        }
-
-        // Queen
-        else if (type == 5) {
-
-            bonus =
-                centerBonus(s) / 3;
-        }
-
-        if (p == WB)
-            whiteBishops++;
-
-        if (p == BB)
-            blackBishops++;
-
-        if (p > 0)
-            score += value + bonus;
-        else
-            score -= value + bonus;
+        return true;
     }
 
-    // Bishop pair
-    if (whiteBishops >= 2)
-        score += 30;
+    void undo(const Move&m,const State&st){
+        whiteTurn=!whiteTurn;
 
-    if (blackBishops >= 2)
-        score -= 30;
+        halfmove=st.oldHalfmove;
+        fullmove=st.oldFullmove;
+        ep=st.oldEp;
+        castle=st.oldCastle;
 
-    // Mobility
-    Board whiteBoard = b;
-    whiteBoard.white = true;
+        int p=b[m.to];
 
-    Board blackBoard = b;
-    blackBoard.white = false;
+        if(m.promo)
+            p=whiteTurn?WP:BP;
 
-    int whiteMob =
-        (int)legalMoves(
-            whiteBoard
-        ).size();
+        b[m.from]=p;
+        b[m.to]=st.captured;
 
-    int blackMob =
-        (int)legalMoves(
-            blackBoard
-        ).size();
+        if(m.flags&EP){
+            int cs=whiteTurn?m.to-8:m.to+8;
+            b[cs]=whiteTurn?BP:WP;
+        }
 
-    score +=
-        (whiteMob - blackMob) * 4;
+        if(m.flags&CASTLE){
+            if(m.to==6){
+                b[7]=b[5];
+                b[5]=0;
+            }else if(m.to==2){
+                b[0]=b[3];
+                b[3]=0;
+            }else if(m.to==62){
+                b[63]=b[61];
+                b[61]=0;
+            }else if(m.to==58){
+                b[56]=b[59];
+                b[59]=0;
+            }
+        }
 
-    // King activity in endgame
-    if (
-        whiteMaterial +
-        blackMaterial <= 4500
-    ) {
-
-        int wk =
-            kingSquare(b, true);
-
-        int bk =
-            kingSquare(b, false);
-
-        if (wk >= 0)
-            score += centerBonus(wk);
-
-        if (bk >= 0)
-            score -= centerBonus(bk);
+        rehash();
     }
 
-    return b.white
-        ? score
-        : -score;
-}
+    vector<Move>legal(bool capturesOnly=false){
+        vector<Move>out;
+        auto ps=pseudo(capturesOnly);
 
-// ============================================================
-// PUCT NODE
-// ============================================================
+        out.reserve(ps.size());
 
-struct Node {
+        bool side=whiteTurn;
 
-    Board board;
+        for(auto&m:ps){
+            State st;
+            make(m,st);
 
-    vector<Move> moves;
-    vector<int> children;
+            if(!inCheck(side))
+                out.push_back(m);
 
-    int parent = -1;
+            undo(m,st);
+        }
 
-    Move move{};
-
-    int visits = 0;
-
-    double value = 0.0;
+        return out;
+    }
 };
 
-static vector<Node> tree;
+struct TTEntry{
+    uint64_t key=0;
+    int depth=-1;
+    int score=0;
+    uint8_t flag=0;
+    Move best{};
+};
 
-static atomic<bool> stopSearch(false);
+static constexpr uint8_t EXACT=0;
+static constexpr uint8_t LOWER=1;
+static constexpr uint8_t UPPER=2;
 
-static chrono::steady_clock::time_point deadline;
+class Engine{
+public:
+    Board root=Board::start();
 
-static uint64_t iterations = 0;
+    vector<TTEntry>tt;
 
-// ============================================================
-// POLICY PRIOR
-// ============================================================
+    uint64_t nodes=0;
 
-static double policyPrior(
-    const Board& b,
-    const Move& m
-) {
-    double prior = 1.0;
+    chrono::steady_clock::time_point deadline;
 
-    if (
-        m.flags &
-        (CAPTURE | EP_CAPTURE)
-    ) {
+    atomic<bool>stop{false};
 
-        int captured =
-            m.flags & EP_CAPTURE
-            ? 100
-            : pieceValue(
-                b.board[m.to]
-            );
+    int maxDepth=30;
+    int skill=20;
+    int aggression=60;
+    int overhead=30;
 
-        int attacker =
-            pieceValue(
-                b.board[m.from]
-            );
+    long long timeLimitMs=1000;
 
-        prior +=
-            2.5 +
-            captured / 120.0 -
-            attacker / 400.0;
+    Move killers[MAX_PLY][2]{};
+
+    int history[2][64][64]{};
+
+    Engine(){
+        setHashMB(32);
     }
 
-    if (m.promotion)
-        prior += 8.0;
-
-    if (
-        m.flags &
-        (KING_CASTLE |
-         QUEEN_CASTLE)
-    ) {
-        prior += 1.5;
-    }
-
-    // Center preference
-    int f =
-        fileOf(m.to);
-
-    int r =
-        rankOf(m.to);
-
-    prior +=
-        max(
-            0,
-            3 - abs(f - 3)
-        ) * 0.18;
-
-    prior +=
-        max(
-            0,
-            3 - abs(r - 3)
-        ) * 0.18;
-
-    return max(
-        0.05,
-        prior
-    );
-}
-
-// ============================================================
-// NODE MANAGEMENT
-// ============================================================
-
-static int createNode(
-    const Board& b,
-    int parent,
-    const Move& move
-) {
-    Node n;
-
-    n.board = b;
-    n.parent = parent;
-    n.move = move;
-
-    tree.push_back(
-        std::move(n)
-    );
-
-    return (int)tree.size() - 1;
-}
-
-static void expandNode(
-    int id
-) {
-    tree[id].moves =
-        legalMoves(
-            tree[id].board
-        );
-
-    tree[id].children.assign(
-        tree[id].moves.size(),
-        -1
-    );
-}
-
-// ============================================================
-// PUCT SELECTION
-// ============================================================
-
-static int selectChild(
-    int id
-) {
-    Node& parent =
-        tree[id];
-
-    double bestScore =
-        -1e100;
-
-    int bestIndex = -1;
-
-    double parentVisits =
-        max(
+    void setHashMB(int mb){
+        size_t n=max<size_t>(
             1,
-            parent.visits
+            (size_t)mb*1024*1024/sizeof(TTEntry)
         );
 
-    double sqrtParent =
-        sqrt(
-            (double)parentVisits
-        );
-
-    for (
-        int i = 0;
-        i < (int)parent.moves.size();
-        ++i
-    ) {
-
-        int childId =
-            parent.children[i];
-
-        // Unvisited move
-        if (childId < 0)
-            return i;
-
-        Node& child =
-            tree[childId];
-
-        double q = 0.0;
-
-        if (child.visits > 0) {
-            q =
-                -child.value /
-                child.visits;
-        }
-
-        double prior =
-            policyPrior(
-                parent.board,
-                parent.moves[i]
-            );
-
-        double u =
-            1.45 *
-            prior *
-            sqrtParent /
-            (1.0 + child.visits);
-
-        double score =
-            q + u;
-
-        if (score > bestScore) {
-            bestScore = score;
-            bestIndex = i;
-        }
+        tt.assign(n,{});
     }
 
-    return bestIndex;
-}
-
-// ============================================================
-// VALUE FUNCTION
-// ============================================================
-
-static double valueNetwork(
-    const Board& b
-) {
-    int score =
-        evaluate(b);
-
-    return tanh(
-        score / 700.0
-    );
-}
-
-// ============================================================
-// PUCT SEARCH
-// ============================================================
-
-static void searchPUCT(
-    const Board& root,
-    int milliseconds
-) {
-    tree.clear();
-
-    tree.reserve(
-        200000
-    );
-
-    int rootId =
-        createNode(
-            root,
-            -1,
-            Move{}
-        );
-
-    expandNode(
-        rootId
-    );
-
-    if (
-        tree[rootId]
-            .moves.empty()
-    ) {
-        cout
-            << "bestmove 0000"
-            << endl;
-
-        return;
+    bool timeUp(){
+        return stop.load()||
+               chrono::steady_clock::now()>=deadline;
     }
 
-    iterations = 0;
+    int pieceVal(int p)const{
+        switch(absPiece(p)){
+            case 1:return 100;
+            case 2:return 320;
+            case 3:return 335;
+            case 4:return 500;
+            case 5:return 900;
+            case 6:return 20000;
+        }
 
-    deadline =
-        chrono::steady_clock::now() +
-        chrono::milliseconds(
-            max(
-                30,
-                milliseconds
-            )
-        );
+        return 0;
+    }
 
-    while (
-        chrono::steady_clock::now() <
-        deadline &&
-        !stopSearch.load()
-    ) {
+    static int pst(int p,int s){
+        int r=white(p)?rankOf(s):7-rankOf(s);
+        int f=fileOf(s);
+        int a=absPiece(p);
+        int v=0;
 
-        int nodeId =
-            rootId;
+        if(a==1){
+            v=r*10-abs(3-f)*2;
 
-        vector<int> path;
+            if(r==3)
+                v+=18;
+        }
 
-        path.reserve(64);
+        else if(a==2){
+            static int t[8][8]={
+                {-50,-30,-20,-20,-20,-20,-30,-50},
+                {-20,0,5,8,8,5,0,-20},
+                {-20,5,12,15,15,12,5,-20},
+                {-10,8,15,20,20,15,8,-10},
+                {-10,8,15,20,20,15,8,-10},
+                {-20,5,12,15,15,12,5,-20},
+                {-20,0,5,8,8,5,0,-20},
+                {-50,-30,-20,-20,-20,-20,-30,-50}
+            };
 
-        path.push_back(
-            rootId
-        );
+            v=t[r][f];
+        }
 
-        // ----------------------------------------------------
-        // Selection / expansion
-        // ----------------------------------------------------
+        else if(a==3){
+            v=6*min(r,7-r)+4*min(f,7-f);
+        }
 
-        while (true) {
+        else if(a==4){
+            v=r*2-abs(3-f);
+        }
 
-            if (
-                tree[nodeId]
-                    .moves.empty()
-            ) {
-                expandNode(
-                    nodeId
-                );
+        else if(a==5){
+            v=-(abs(3-f)+abs(3-r));
+        }
 
-                break;
-            }
+        else if(a==6){
+            v=(r<2?-(abs(3-f)*2):0);
 
-            int moveIndex =
-                selectChild(
-                    nodeId
-                );
+            if(r>=5)
+                v+=10-abs(3-f)*2;
+        }
 
-            if (moveIndex < 0)
-                break;
+        return v;
+    }
 
-            int childId =
-                tree[nodeId]
-                    .children[moveIndex];
+    int evaluate(const Board&b)const{
+        int score=0;
+        int wmat=0;
+        int bmat=0;
+        int wmob=0;
+        int bmob=0;
 
-            // New node
-            if (childId < 0) {
+        int filesW[8]={};
+        int filesB[8]={};
 
-                Board next =
-                    makeMove(
-                        tree[nodeId].board,
-                        tree[nodeId]
-                            .moves[moveIndex]
-                    );
+        for(int s=0;s<64;s++){
+            int p=b.b[s];
 
-                childId =
-                    createNode(
-                        next,
-                        nodeId,
-                        tree[nodeId]
-                            .moves[moveIndex]
-                    );
+            if(!p)
+                continue;
 
-                tree[nodeId]
-                    .children[moveIndex] =
-                    childId;
+            int v=pieceVal(p)+pst(p,s);
 
-                nodeId =
-                    childId;
+            if(p>0){
+                score+=v;
+                wmat+=pieceVal(p);
 
-                path.push_back(
-                    nodeId
-                );
+                if(p==WP)
+                    filesW[fileOf(s)]++;
+            }else{
+                score-=v;
+                bmat+=pieceVal(p);
 
-                expandNode(
-                    nodeId
-                );
-
-                break;
-            }
-
-            nodeId =
-                childId;
-
-            path.push_back(
-                nodeId
-            );
-
-            if (
-                tree[nodeId]
-                    .visits == 0
-            ) {
-                break;
+                if(p==BP)
+                    filesB[fileOf(s)]++;
             }
         }
 
-        // ----------------------------------------------------
-        // Evaluation
-        // ----------------------------------------------------
+        for(int s=0;s<64;s++){
+            int p=b.b[s];
 
-        double value =
-            valueNetwork(
-                tree[nodeId]
-                    .board
-            );
+            if(!p)
+                continue;
 
-        // ----------------------------------------------------
-        // Backpropagation
-        // ----------------------------------------------------
+            int f=fileOf(s);
+            int r=rankOf(s);
+            int a=absPiece(p);
+            int m=0;
 
-        for (
-            auto it = path.rbegin();
-            it != path.rend();
-            ++it
-        ) {
+            if(a==1){
+                int nr=r+(p>0?1:-1);
 
-            Node& n =
-                tree[*it];
+                for(int df:{-1,1}){
+                    int nf=f+df;
 
-            n.visits++;
+                    if(nf>=0&&nf<8&&nr>=0&&nr<8)
+                        m++;
+                }
+            }
 
-            n.value +=
-                value;
+            else if(a==2){
+                static const int df[8]=
+                    {1,2,2,1,-1,-2,-2,-1};
 
-            value = -value;
+                static const int dr[8]=
+                    {2,1,-1,-2,-2,-1,1,2};
+
+                for(int i=0;i<8;i++){
+                    int nf=f+df[i];
+                    int nr=r+dr[i];
+
+                    if(
+                        nf>=0&&nf<8&&
+                        nr>=0&&nr<8&&
+                        (
+                            !b.b[sq(nf,nr)]||
+                            white(b.b[sq(nf,nr)])!=white(p)
+                        )
+                    )
+                        m++;
+                }
+            }
+
+            else if(a==3||a==4||a==5){
+                static const int df[8]=
+                    {1,1,-1,-1,1,-1,0,0};
+
+                static const int dr[8]=
+                    {1,-1,1,-1,0,0,1,-1};
+
+                int begin=a==3?0:a==4?4:0;
+                int end=a==3?4:8;
+
+                for(int d=begin;d<end;d++){
+                    int nf=f+df[d];
+                    int nr=r+dr[d];
+
+                    while(
+                        nf>=0&&nf<8&&
+                        nr>=0&&nr<8
+                    ){
+                        m++;
+
+                        if(b.b[sq(nf,nr)])
+                            break;
+
+                        nf+=df[d];
+                        nr+=dr[d];
+                    }
+                }
+            }
+
+            else{
+                for(int df=-1;df<=1;df++){
+                    for(int dr=-1;dr<=1;dr++){
+                        if(df||dr){
+                            int nf=f+df;
+                            int nr=r+dr;
+
+                            if(
+                                nf>=0&&nf<8&&
+                                nr>=0&&nr<8
+                            )
+                                m++;
+                        }
+                    }
+                }
+            }
+
+            if(p>0)
+                wmob+=m;
+            else
+                bmob+=m;
         }
 
-        iterations++;
+        score+=(wmob-bmob)*3;
 
-        if (
-            (iterations & 4095ULL) == 0
-        ) {
+        for(int f=0;f<8;f++){
+            if(filesW[f]==1)
+                score-=12;
 
-            if (
-                chrono::steady_clock::now() >=
-                deadline
-            )
-                break;
+            if(filesB[f]==1)
+                score+=12;
+
+            if(filesW[f]==0&&filesB[f]>0)
+                score-=3;
+
+            if(filesB[f]==0&&filesW[f]>0)
+                score+=3;
         }
 
-        if (
-            tree.size() >=
-            190000
-        )
-            break;
-    }
+        for(int s=0;s<64;s++){
+            int p=b.b[s];
 
-    // --------------------------------------------------------
-    // Select best root move
-    // --------------------------------------------------------
+            if(absPiece(p)!=1)
+                continue;
 
-    int bestIndex = 0;
-    int bestVisits = -1;
-    double bestValue = -1e100;
+            int f=fileOf(s);
+            int r=rankOf(s);
+            bool passed=true;
 
-    for (
-        int i = 0;
-        i < (int)tree[rootId]
-            .moves.size();
-        ++i
-    ) {
+            for(
+                int nf=max(0,f-1);
+                nf<=min(7,f+1);
+                nf++
+            ){
+                if(!passed)
+                    break;
 
-        int child =
-            tree[rootId]
-                .children[i];
+                if(p>0){
+                    for(int rr=r+1;rr<8;rr++){
+                        if(b.b[sq(nf,rr)]==BP){
+                            passed=false;
+                            break;
+                        }
+                    }
+                }else{
+                    for(int rr=0;rr<r;rr++){
+                        if(b.b[sq(nf,rr)]==WP){
+                            passed=false;
+                            break;
+                        }
+                    }
+                }
+            }
 
-        if (child < 0)
-            continue;
+            if(passed){
+                int advance=
+                    p>0?r:7-r;
 
-        int visits =
-            tree[child]
-                .visits;
-
-        double value = 0.0;
-
-        if (
-            tree[child]
-                .visits > 0
-        ) {
-            value =
-                -tree[child].value /
-                tree[child].visits;
+                score+=
+                    (p>0?1:-1)*
+                    (18+max(0,advance-3)*12);
+            }
         }
 
-        if (
-            visits > bestVisits ||
-            (
-                visits == bestVisits &&
-                value > bestValue
-            )
-        ) {
-            bestVisits = visits;
-            bestValue = value;
-            bestIndex = i;
+        if(b.whiteTurn)
+            score+=aggression*(wmob-bmob)/50;
+        else
+            score-=aggression*(wmob-bmob)/50;
+
+        return b.whiteTurn?score:-score;
+    }
+
+    int captureScore(
+        const Board&b,
+        const Move&m
+    )const{
+        if(!m.capture&&!(m.flags&EP))
+            return 0;
+
+        int victim=
+            m.capture?
+            pieceVal(m.capture):
+            100;
+
+        int attacker=pieceVal(m.piece);
+
+        return 100000+
+               victim*16-
+               attacker;
+    }
+
+    void order(
+        Board&b,
+        vector<Move>&ms,
+        const Move*ttMove=nullptr,
+        int ply=0
+    ){
+        for(auto&m:ms){
+            m.score=0;
+
+            if(ttMove&&m==*ttMove)
+                m.score+=10000000;
+
+            m.score+=captureScore(b,m);
+
+            if(m.promo)
+                m.score+=8000;
+
+            if(ply<MAX_PLY){
+                if(m==killers[ply][0])
+                    m.score+=500000;
+
+                if(m==killers[ply][1])
+                    m.score+=450000;
+            }
+
+            m.score+=
+                history[b.whiteTurn?1:0]
+                       [m.from][m.to];
         }
+
+        stable_sort(
+            ms.begin(),
+            ms.end(),
+            [](const Move&a,const Move&b){
+                return a.score>b.score;
+            }
+        );
     }
 
-    Move best =
-        tree[rootId]
-            .moves[bestIndex];
+    int quiesce(
+        Board&b,
+        int alpha,
+        int beta,
+        int ply
+    ){
+        if(timeUp())
+            return 0;
 
-    cout
-        << "info nodes "
-        << iterations
-        << " score cp "
-        << evaluate(root)
-        << " pv "
-        << uciMove(best)
-        << endl;
+        nodes++;
 
-    cout
-        << "bestmove "
-        << uciMove(best)
-        << endl;
-}
+        int stand=evaluate(b);
 
-// ============================================================
-// UCI SQUARE
-// ============================================================
+        if(stand>=beta)
+            return beta;
 
-static bool parseSquare(
-    const string& s,
-    int& out
-) {
-    if (
-        s.size() != 2 ||
-        s[0] < 'a' ||
-        s[0] > 'h' ||
-        s[1] < '1' ||
-        s[1] > '8'
-    )
-        return false;
+        if(stand>alpha)
+            alpha=stand;
 
-    out =
-        (s[1] - '1') * 8 +
-        (s[0] - 'a');
+        auto ms=b.legal(true);
 
-    return true;
-}
+        order(b,ms,nullptr,ply);
 
-// ============================================================
-// INTEGER PARSER
-// ============================================================
+        for(auto&m:ms){
+            State st;
 
-static int parseNumber(
-    const string& s,
-    int fallback
-) {
-    if (s.empty())
-        return fallback;
+            b.make(m,st);
 
-    int sign = 1;
-    size_t i = 0;
-
-    if (s[0] == '-') {
-        sign = -1;
-        i = 1;
-    }
-
-    if (i >= s.size())
-        return fallback;
-
-    int result = 0;
-
-    for (; i < s.size(); ++i) {
-
-        if (
-            s[i] < '0' ||
-            s[i] > '9'
-        )
-            return fallback;
-
-        result =
-            result * 10 +
-            (s[i] - '0');
-
-        if (result > 100000000)
-            return fallback;
-    }
-
-    return result * sign;
-}
-
-// ============================================================
-// APPLY UCI MOVE
-// ============================================================
-
-static bool applyUCIMove(
-    Board& b,
-    const string& uci
-) {
-    if (uci.size() < 4)
-        return false;
-
-    int from;
-    int to;
-
-    if (
-        !parseSquare(
-            uci.substr(0, 2),
-            from
-        )
-    )
-        return false;
-
-    if (
-        !parseSquare(
-            uci.substr(2, 2),
-            to
-        )
-    )
-        return false;
-
-    int promotion = EMPTY;
-
-    if (uci.size() >= 5) {
-
-        char c =
-            (char)tolower(
-                (unsigned char)uci[4]
-            );
-
-        if (c == 'q')
-            promotion =
-                b.white ? WQ : BQ;
-
-        else if (c == 'r')
-            promotion =
-                b.white ? WR : BR;
-
-        else if (c == 'b')
-            promotion =
-                b.white ? WB : BB;
-
-        else if (c == 'n')
-            promotion =
-                b.white ? WN : BN;
-    }
-
-    vector<Move> moves =
-        legalMoves(b);
-
-    for (const Move& m : moves) {
-
-        if (
-            m.from == from &&
-            m.to == to &&
-            (
-                m.promotion ==
-                promotion
-            )
-        ) {
-
-            b =
-                makeMove(
+            int score=
+                -quiesce(
                     b,
-                    m
+                    -beta,
+                    -alpha,
+                    ply+1
                 );
 
-            return true;
+            b.undo(m,st);
+
+            if(score>=beta)
+                return beta;
+
+            if(score>alpha)
+                alpha=score;
+
+            if(timeUp())
+                break;
         }
+
+        return alpha;
     }
 
-    return false;
-}
+    int search(
+        Board&b,
+        int depth,
+        int alpha,
+        int beta,
+        int ply,
+        bool allowNull=true
+    ){
+        if(timeUp())
+            return 0;
 
-// ============================================================
-// FEN
-// ============================================================
+        nodes++;
 
-static bool parseFEN(
-    const string& fen,
-    Board& out
-) {
-    vector<string> parts;
+        if(ply>=MAX_PLY-1)
+            return evaluate(b);
 
-    stringstream ss(fen);
+        bool inChk=b.inCheck(b.whiteTurn);
 
-    string token;
+        if(inChk)
+            depth++;
 
-    while (ss >> token)
-        parts.push_back(token);
+        if(depth<=0)
+            return quiesce(
+                b,
+                alpha,
+                beta,
+                ply
+            );
 
-    if (parts.size() < 4)
-        return false;
+        TTEntry&e=
+            tt[b.key%tt.size()];
 
-    Board b;
+        Move ttMove{};
 
-    b.board.fill(
-        EMPTY
-    );
+        bool hasTT=
+            e.key==b.key&&
+            e.depth>=0;
 
-    int rank = 7;
-    int file = 0;
+        if(hasTT)
+            ttMove=e.best;
 
-    for (char c : parts[0]) {
+        if(hasTT&&e.depth>=depth){
+            if(e.flag==EXACT)
+                return e.score;
 
-        if (c == '/') {
-            rank--;
-            file = 0;
-            continue;
+            if(e.flag==LOWER)
+                alpha=max(alpha,e.score);
+            else if(e.flag==UPPER)
+                beta=min(beta,e.score);
+
+            if(alpha>=beta)
+                return e.score;
         }
 
-        if (
-            c >= '1' &&
-            c <= '8'
-        ) {
-            file +=
-                c - '0';
+        if(
+            allowNull&&
+            !inChk&&
+            depth>=3
+        ){
+            Board tmp=b;
 
-            continue;
+            tmp.whiteTurn=!tmp.whiteTurn;
+            tmp.ep=-1;
+            tmp.halfmove++;
+            tmp.rehash();
+
+            int reduction=2+(depth>=6);
+
+            int sc=
+                -search(
+                    tmp,
+                    depth-reduction-1,
+                    -beta,
+                    -beta+1,
+                    ply+1,
+                    false
+                );
+
+            if(sc>=beta)
+                return beta;
         }
 
-        int p = EMPTY;
+        auto ms=b.legal(false);
 
-        switch (c) {
+        if(ms.empty())
+            return inChk?
+                (-MATE+ply):
+                0;
 
-            case 'P': p = WP; break;
-            case 'N': p = WN; break;
-            case 'B': p = WB; break;
-            case 'R': p = WR; break;
-            case 'Q': p = WQ; break;
-            case 'K': p = WK; break;
+        order(
+            b,
+            ms,
+            hasTT?&ttMove:nullptr,
+            ply
+        );
 
-            case 'p': p = BP; break;
-            case 'n': p = BN; break;
-            case 'b': p = BB; break;
-            case 'r': p = BR; break;
-            case 'q': p = BQ; break;
-            case 'k': p = BK; break;
+        int originalAlpha=alpha;
+        int best=-INF;
+        Move bestMove{};
+        int legalCount=0;
 
-            default:
-                return false;
+        for(size_t i=0;i<ms.size();i++){
+            Move m=ms[i];
+
+            State st;
+
+            b.make(m,st);
+
+            int sc;
+
+            if(legalCount==0){
+                sc=
+                    -search(
+                        b,
+                        depth-1,
+                        -beta,
+                        -alpha,
+                        ply+1,
+                        true
+                    );
+            }else{
+                int reduction=
+                    (
+                        depth>=5&&
+                        legalCount>=4&&
+                        !inChk&&
+                        !m.capture&&
+                        !m.promo
+                    )?1:0;
+
+                sc=
+                    -search(
+                        b,
+                        depth-1-reduction,
+                        -alpha-1,
+                        -alpha,
+                        ply+1,
+                        true
+                    );
+
+                if(reduction&&sc>alpha){
+                    sc=
+                        -search(
+                            b,
+                            depth-1,
+                            -beta,
+                            -alpha,
+                            ply+1,
+                            true
+                        );
+                }
+
+                if(
+                    sc>alpha&&
+                    sc<beta
+                ){
+                    sc=
+                        -search(
+                            b,
+                            depth-1,
+                            -beta,
+                            -alpha,
+                            ply+1,
+                            true
+                        );
+                }
+            }
+
+            b.undo(m,st);
+
+            legalCount++;
+
+            if(sc>best){
+                best=sc;
+                bestMove=m;
+            }
+
+            if(sc>alpha)
+                alpha=sc;
+
+            if(alpha>=beta){
+                if(!m.capture&&!m.promo){
+                    if(!(m==killers[ply][0])){
+                        killers[ply][1]=
+                            killers[ply][0];
+
+                        killers[ply][0]=m;
+                    }
+
+                    history[
+                        b.whiteTurn?1:0
+                    ][m.from][m.to]+=
+                        depth*depth*4;
+                }
+
+                break;
+            }
+
+            if(timeUp())
+                break;
         }
 
-        if (
-            rank < 0 ||
-            file >= 8
+        uint8_t flag=
+            best<=originalAlpha?
+            UPPER:
+            best>=beta?
+            LOWER:
+            EXACT;
+
+        e.key=b.key;
+        e.depth=depth;
+        e.score=best;
+        e.flag=flag;
+        e.best=bestMove;
+
+        return best;
+    }
+
+    string uci(const Move&m)const{
+        string s;
+
+        s+=char('a'+fileOf(m.from));
+        s+=char('1'+rankOf(m.from));
+        s+=char('a'+fileOf(m.to));
+        s+=char('1'+rankOf(m.to));
+
+        if(m.promo){
+            int p=absPiece(m.promo);
+
+            s+=
+                p==5?'q':
+                p==4?'r':
+                p==3?'b':
+                'n';
+        }
+
+        return s;
+    }
+
+    Move think(int movetime){
+        stop=false;
+        nodes=0;
+
+        deadline=
+            chrono::steady_clock::now()+
+            chrono::milliseconds(
+                max(20,movetime)
+            );
+
+        Move best{};
+
+        vector<Move>rootMoves=
+            root.legal(false);
+
+        if(rootMoves.empty())
+            return best;
+
+        order(
+            root,
+            rootMoves,
+            nullptr,
+            0
+        );
+
+        int lastScore=0;
+
+        for(int depth=1;
+            depth<=maxDepth;
+            depth++){
+
+            if(timeUp())
+                break;
+
+            int alpha=-INF;
+            int beta=INF;
+
+            if(depth>=4){
+                alpha=lastScore-80;
+                beta=lastScore+80;
+            }
+
+            Move iterBest=best;
+            int iterScore=-INF;
+
+            for(auto&m:rootMoves){
+                if(timeUp())
+                    break;
+
+                State st;
+
+                root.make(m,st);
+
+                int score=
+                    -search(
+                        root,
+                        depth-1,
+                        -beta,
+                        -alpha,
+                        1,
+                        true
+                    );
+
+                root.undo(m,st);
+
+                if(score>iterScore){
+                    iterScore=score;
+                    iterBest=m;
+                }
+
+                if(score>alpha)
+                    alpha=score;
+            }
+
+            if(timeUp())
+                break;
+
+            best=iterBest;
+            lastScore=iterScore;
+
+            order(
+                root,
+                rootMoves,
+                &best,
+                0
+            );
+
+            cout
+                <<"info depth "
+                <<depth
+                <<" score cp "
+                <<iterScore
+                <<" nodes "
+                <<nodes
+                <<" pv "
+                <<uci(best)
+                <<"\n"
+                <<flush;
+
+            if(abs(iterScore)>MATE-100)
+                break;
+        }
+
+        return best;
+    }
+
+    bool parseMoveOn(
+        Board&b,
+        const string&s,
+        Move&out
+    ){
+        if(s.size()<4)
+            return false;
+
+        int f1=s[0]-'a';
+        int r1=s[1]-'1';
+        int f2=s[2]-'a';
+        int r2=s[3]-'1';
+
+        if(
+            f1<0||f1>7||
+            r1<0||r1>7||
+            f2<0||f2>7||
+            r2<0||r2>7
         )
             return false;
 
-        b.board[
-            rank * 8 + file
-        ] = p;
+        int promo=0;
 
-        file++;
-    }
-
-    if (
-        rank != 0 ||
-        file != 8
-    )
-        return false;
-
-    b.white =
-        parts[1] == "w";
-
-    b.castle = 0;
-
-    if (parts[2] != "-") {
-
-        for (char c : parts[2]) {
-
-            if (c == 'K')
-                b.castle |= 1;
-
-            else if (c == 'Q')
-                b.castle |= 2;
-
-            else if (c == 'k')
-                b.castle |= 4;
-
-            else if (c == 'q')
-                b.castle |= 8;
-        }
-    }
-
-    b.ep = -1;
-
-    if (
-        parts[3] != "-" &&
-        !parseSquare(
-            parts[3],
-            b.ep
-        )
-    )
-        return false;
-
-    if (parts.size() >= 5) {
-
-        b.halfmove =
-            parseNumber(
-                parts[4],
-                0
-            );
-    }
-
-    if (parts.size() >= 6) {
-
-        b.fullmove =
-            parseNumber(
-                parts[5],
-                1
-            );
-    }
-
-    out = b;
-
-    return true;
-}
-
-// ============================================================
-// POSITION
-// ============================================================
-
-static void setPosition(
-    Board& board,
-    const string& line
-) {
-    stringstream ss(line);
-
-    string token;
-
-    ss >> token;
-
-    ss >> token;
-
-    if (token == "startpos") {
-
-        board =
-            Board::startpos();
-
-        if (
-            ss >> token &&
-            token == "moves"
-        ) {
-
-            while (ss >> token) {
-                applyUCIMove(
-                    board,
-                    token
+        if(s.size()>4){
+            char c=
+                tolower(
+                    (unsigned char)s[4]
                 );
+
+            promo=
+                c=='q'?5:
+                c=='r'?4:
+                c=='b'?3:
+                c=='n'?2:
+                0;
+        }
+
+        for(auto&m:b.legal(false)){
+            if(
+                m.from==sq(f1,r1)&&
+                m.to==sq(f2,r2)&&
+                (
+                    promo==0||
+                    absPiece(m.promo)==promo
+                )
+            ){
+                out=m;
+                return true;
             }
         }
 
-        return;
+        return false;
     }
 
-    if (token == "fen") {
+    void position(const string&line){
+        stringstream ss(line);
 
-        vector<string> fenParts;
+        string tok;
+        ss>>tok;
 
-        while (
-            ss >> token &&
-            token != "moves" &&
-            fenParts.size() < 6
-        ) {
-            fenParts.push_back(
-                token
-            );
+        Board b;
+
+        if(tok=="startpos"){
+            b=Board::start();
+        }else if(tok=="fen"){
+            string fen,part;
+
+            for(int i=0;i<6&&ss>>part;i++){
+                if(i)
+                    fen+=" ";
+
+                fen+=part;
+            }
+
+            if(!b.fromFEN(fen))
+                return;
+        }else{
+            return;
         }
 
-        string fen;
+        string mt;
+        ss>>mt;
 
-        for (
-            const string& x :
-            fenParts
-        ) {
+        if(mt=="moves"){
+            string ms;
 
-            if (!fen.empty())
-                fen += ' ';
+            while(ss>>ms){
+                Move m;
 
-            fen += x;
-        }
+                if(!parseMoveOn(b,ms,m))
+                    break;
 
-        Board parsed;
-
-        if (
-            parseFEN(
-                fen,
-                parsed
-            )
-        ) {
-            board = parsed;
-        }
-
-        if (token == "moves") {
-
-            while (ss >> token) {
-
-                applyUCIMove(
-                    board,
-                    token
-                );
+                State st;
+                b.make(m,st);
             }
         }
+
+        root=b;
     }
-}
+};
 
-// ============================================================
-// UCI
-// ============================================================
+static int toInt(
+    const string&s,
+    int def
+){
+    char*e=nullptr;
 
-static void printUCI() {
-
-    cout
-        << "id name SimpleLogics PUCT"
-        << endl;
-
-    cout
-        << "id author Danny"
-        << endl;
-
-    cout
-        << "option name Hash type spin "
-        << "default 32 min 1 max 512"
-        << endl;
-
-    cout
-        << "option name Threads type spin "
-        << "default 1 min 1 max 1"
-        << endl;
-
-    cout
-        << "option name Move Overhead type spin "
-        << "default 50 min 0 max 1000"
-        << endl;
-
-    cout
-        << "uciok"
-        << endl;
-}
-
-// ============================================================
-// TIME CONTROL
-// ============================================================
-
-static int calculateTime(
-    const Board& b,
-    const string& line
-) {
-    stringstream ss(line);
-
-    string token;
-
-    int moveTime = -1;
-
-    int whiteTime = -1;
-    int blackTime = -1;
-
-    int whiteInc = 0;
-    int blackInc = 0;
-
-    while (ss >> token) {
-
-        if (token == "movetime") {
-
-            ss >> token;
-
-            moveTime =
-                parseNumber(
-                    token,
-                    -1
-                );
-        }
-
-        else if (token == "wtime") {
-
-            ss >> token;
-
-            whiteTime =
-                parseNumber(
-                    token,
-                    -1
-                );
-        }
-
-        else if (token == "btime") {
-
-            ss >> token;
-
-            blackTime =
-                parseNumber(
-                    token,
-                    -1
-                );
-        }
-
-        else if (token == "winc") {
-
-            ss >> token;
-
-            whiteInc =
-                parseNumber(
-                    token,
-                    0
-                );
-        }
-
-        else if (token == "binc") {
-
-            ss >> token;
-
-            blackInc =
-                parseNumber(
-                    token,
-                    0
-                );
-        }
-    }
-
-    if (moveTime >= 0)
-        return max(
-            50,
-            moveTime - 50
+    long v=
+        strtol(
+            s.c_str(),
+            &e,
+            10
         );
 
-    int time =
-        b.white
-        ? whiteTime
-        : blackTime;
-
-    int increment =
-        b.white
-        ? whiteInc
-        : blackInc;
-
-    if (time < 0)
-        return 1000;
-
-    int budget =
-        time / 30 +
-        increment * 3 / 4;
-
-    budget =
-        max(
-            50,
-            budget
-        );
-
-    budget =
-        min(
-            budget,
-            max(
-                50,
-                time / 3
-            )
-        );
-
-    return min(
-        budget,
-        10000
-    );
+    return(e&&*e==0)?(int)v:def;
 }
 
-// ============================================================
-// MAIN
-// ============================================================
-
-int main() {
-
+int main(){
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    Board board =
-        Board::startpos();
-
+    Engine e;
     string line;
 
-    while (
-        getline(cin, line)
-    ) {
+    cout
+        <<"SimpleLogics by DannyDwie\n"
+        <<flush;
 
-        if (line == "uci") {
+    while(getline(cin,line)){
 
-            printUCI();
-        }
-
-        else if (
-            line == "isready"
-        ) {
-
+        if(line=="uci"){
             cout
-                << "readyok"
-                << endl;
+                <<"id name SimpleLogics\n"
+                <<"id author DannyDwie\n"
+                <<"option name Hash type spin default 32 min 1 max 512\n"
+                <<"option name Threads type spin default 1 min 1 max 1\n"
+                <<"option name Skill Level type spin default 20 min 0 max 20\n"
+                <<"option name Aggression type spin default 60 min 0 max 100\n"
+                <<"option name Search Depth type spin default 30 min 1 max 64\n"
+                <<"option name Move Overhead type spin default 30 min 0 max 500\n"
+                <<"uciok\n"
+                <<flush;
         }
 
-        else if (
+        else if(line=="isready"){
+            cout
+                <<"readyok\n"
+                <<flush;
+        }
+
+        else if(line=="ucinewgame"){
+            e.tt.assign(e.tt.size(),{});
+            e.root=Board::start();
+        }
+
+        else if(
+            line.rfind(
+                "setoption name ",
+                0
+            )==0
+        ){
+            string rest=line.substr(15);
+            string name,value;
+
+            size_t p=rest.find(" value ");
+
+            if(p!=string::npos){
+                name=rest.substr(0,p);
+                value=rest.substr(p+7);
+            }else{
+                name=rest;
+            }
+
+            if(name=="Hash"){
+                e.setHashMB(
+                    max(1,toInt(value,32))
+                );
+            }
+
+            else if(name=="Skill Level"){
+                e.skill=
+                    max(
+                        0,
+                        min(
+                            20,
+                            toInt(value,20)
+                        )
+                    );
+            }
+
+            else if(name=="Aggression"){
+                e.aggression=
+                    max(
+                        0,
+                        min(
+                            100,
+                            toInt(value,60)
+                        )
+                    );
+            }
+
+            else if(name=="Search Depth"){
+                e.maxDepth=
+                    max(
+                        1,
+                        min(
+                            64,
+                            toInt(value,30)
+                        )
+                    );
+            }
+
+            else if(name=="Move Overhead"){
+                e.overhead=
+                    max(
+                        0,
+                        min(
+                            500,
+                            toInt(value,30)
+                        )
+                    );
+            }
+        }
+
+        else if(
             line.rfind(
                 "position ",
                 0
-            ) == 0
-        ) {
-
-            setPosition(
-                board,
-                line
-            );
+            )==0
+        ){
+            e.position(line.substr(9));
         }
 
-        else if (
-            line == "ucinewgame"
-        ) {
+        else if(
+            line.rfind("go",0)==0
+        ){
+            stringstream ss(line);
 
-            board =
-                Board::startpos();
+            string t;
+            ss>>t;
 
-            tree.clear();
-        }
+            int movetime=0;
+            int depth=0;
 
-        else if (
-            line.rfind(
-                "go",
-                0
-            ) == 0
-        ) {
+            while(ss>>t){
+                if(t=="movetime"){
+                    ss>>movetime;
+                }
+                else if(t=="depth"){
+                    ss>>depth;
+                }
+                else if(
+                    t=="wtime"||
+                    t=="btime"
+                ){
+                    int x;
+                    ss>>x;
 
-            int milliseconds =
-                calculateTime(
-                    board,
-                    line
+                    if(!movetime){
+                        movetime=max(
+                            50,
+                            x/30
+                        );
+                    }
+                }
+                else if(t=="infinite"){
+                    movetime=600000;
+                }
+            }
+
+            if(depth>0){
+                e.maxDepth=
+                    min(
+                        64,
+                        depth
+                    );
+            }
+
+            int mt=
+                movetime?
+                movetime:
+                1000;
+
+            int actual=
+                max(
+                    50,
+                    mt-e.overhead
                 );
 
-            stopSearch.store(
-                false
-            );
+            Move m=e.think(actual);
 
-            searchPUCT(
-                board,
-                milliseconds
-            );
+            if(m.from!=m.to){
+                cout
+                    <<"bestmove "
+                    <<e.uci(m)
+                    <<"\n"
+                    <<flush;
+            }else{
+                cout
+                    <<"bestmove 0000\n"
+                    <<flush;
+            }
         }
 
-        else if (
-            line == "stop"
-        ) {
-
-            stopSearch.store(
-                true
-            );
+        else if(line=="stop"){
+            e.stop=true;
         }
 
-        else if (
-            line == "quit"
-        ) {
-
-            stopSearch.store(
-                true
-            );
-
+        else if(line=="quit"){
             break;
         }
     }
