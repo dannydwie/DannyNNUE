@@ -8,7 +8,7 @@ project(SimpleLogics LANGUAGES NONE)
 # No experimental Hybrid V2 heuristics.
 # ============================================================
 
-set(SF_TAG "stockfish-dev-20260919-17a6c8f1"
+set(SF_TAG "stockfish-dev-20260922-0a215d6c"
     CACHE STRING "Stockfish version")
 
 set(SF_DIR
