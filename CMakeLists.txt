@@ -13,7 +13,6 @@ add_executable(SimpleLogics
 target_compile_options(SimpleLogics PRIVATE
     -O3
     -ffast-math
-    -fno-exceptions
     -fno-rtti
 )
 
