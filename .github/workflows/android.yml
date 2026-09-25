@@ -1,4 +1,4 @@
-name: Build SimpleLogics Lc0 Android
+name: Build SimpleLogics 2600 Android
 
 on:
   push:
@@ -20,16 +20,10 @@ jobs:
 
     steps:
 
-      # =========================================================
-      # 1. CHECKOUT
-      # =========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
 
-      # =========================================================
-      # 2. BUILD TOOLS
-      # =========================================================
       - name: Install build tools
         run: |
           sudo apt-get update
@@ -47,9 +41,6 @@ jobs:
           python3 -m pip install --upgrade meson
 
 
-      # =========================================================
-      # 3. ANDROID SDK + NDK
-      # =========================================================
       - name: Setup Android SDK and NDK
         env:
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -59,13 +50,9 @@ jobs:
 
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
-          echo "Using sdkmanager:"
           "$SDKMANAGER" --version
 
-          echo "Accept Android licenses..."
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-
-          echo "Installing Android components..."
 
           "$SDKMANAGER" \
             "platform-tools" \
@@ -76,89 +63,58 @@ jobs:
 
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-          echo "$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
-
-          echo "=============================================="
-          echo "ANDROID SDK"
-          echo "=============================================="
-
-          ls -lah "$ANDROID_SDK_ROOT"
-
-          echo "=============================================="
-          echo "ANDROID NDK"
-          echo "=============================================="
-
-          ls -lah "$ANDROID_NDK_ROOT"
-
-          echo "=============================================="
-          echo "NDK VERSION"
-          echo "=============================================="
-
-          cat "$ANDROID_NDK_ROOT/source.properties"
+          echo "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
 
-      # =========================================================
-      # 4. CLONE LC0
-      # =========================================================
       - name: Clone Lc0
         run: |
           git clone \
             --depth 1 \
             --branch v0.32.1 \
-            https://github.com/LeelaChessZero/lc0.git \
-            lc0
+            https://github.com/LeelaChessZero/lc0.git lc0
 
-          cd lc0
+
+      - name: Download SimpleLogics 2600 Network
+        run: |
+          mkdir -p network
+
+          wget -q --show-progress \
+            "https://storage.lczero.org/files/networks-contrib/t1-256x10-distilled-swa-2432500.pb.gz" \
+            -O network/weights-t1-256x10.pb.gz
+
+          test -s network/weights-t1-256x10.pb.gz
 
           echo "=============================================="
-          echo "LC0 VERSION"
+          echo "NETWORK"
           echo "=============================================="
 
-          git describe --tags --always || true
+          ls -lh network/weights-t1-256x10.pb.gz
 
 
-      # =========================================================
-      # 5. DOWNLOAD OPENBLAS
-      # =========================================================
-      - name: Download Android OpenBLAS
+      - name: Download OpenBLAS
         run: |
           mkdir -p deps
 
           cd deps
 
-          wget -q \
-            https://github.com/borg323/OpenBLAS/releases/download/android-0.3.27/openblas-android-aarch64.zip
-
-          echo "OpenBLAS downloaded"
+          wget -q --show-progress \
+            "https://github.com/borg323/OpenBLAS/releases/download/android-0.3.27/openblas-android-aarch64.zip"
 
           unzip -q openblas-android-aarch64.zip
 
-          echo "=============================================="
-          echo "OPENBLAS FILES"
-          echo "=============================================="
-
-          find . -maxdepth 4 -type f | sort
+          echo "OpenBLAS:"
+          find . -type f | sort
 
 
-      # =========================================================
-      # 6. LOCATE OPENBLAS
-      # =========================================================
-      - name: Prepare OpenBLAS
+      - name: Locate OpenBLAS
         run: |
-          echo "Searching OpenBLAS..."
-
-          find "$GITHUB_WORKSPACE/deps" \
-            -type f \
-            \( -name "libopenblas.a" -o -name "libopenblas.so" \) \
-            -print
-
           OPENBLAS_LIB=$(find "$GITHUB_WORKSPACE/deps" \
             -type f \
             -name "libopenblas.a" \
             | head -n 1)
 
           if [ -z "$OPENBLAS_LIB" ]; then
-            echo "ERROR: libopenblas.a not found"
+            echo "ERROR: OpenBLAS library not found"
             exit 1
           fi
 
@@ -166,23 +122,11 @@ jobs:
 
           echo "OPENBLAS_ROOT=$OPENBLAS_ROOT" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "OPENBLAS ROOT"
-          echo "=============================================="
-
+          echo "OpenBLAS root:"
           echo "$OPENBLAS_ROOT"
 
-          echo "=============================================="
-          echo "OPENBLAS CONTENT"
-          echo "=============================================="
 
-          find "$OPENBLAS_ROOT" -maxdepth 3 -type f | sort
-
-
-      # =========================================================
-      # 7. CREATE ANDROID AARCH64 CROSS FILE
-      # =========================================================
-      - name: Create Android AArch64 cross file
+      - name: Create Android cross file
         run: |
           cat > android-aarch64.ini <<EOF
 
@@ -200,26 +144,15 @@ jobs:
 
           EOF
 
-          echo "=============================================="
-          echo "ANDROID CROSS FILE"
-          echo "=============================================="
-
           cat android-aarch64.ini
 
 
-      # =========================================================
-      # 8. CHECK COMPILER
-      # =========================================================
-      - name: Check Android compiler
+      - name: Check compiler
         run: |
           aarch64-linux-android29-clang --version
-
           aarch64-linux-android29-clang++ --version
 
 
-      # =========================================================
-      # 9. CONFIGURE LC0
-      # =========================================================
       - name: Configure Lc0
         working-directory: lc0
         run: |
@@ -232,16 +165,7 @@ jobs:
             -Dopenblas_libdirs="$OPENBLAS_ROOT/lib" \
             -Ddefault_library=static
 
-          echo "=============================================="
-          echo "MESON CONFIGURATION"
-          echo "=============================================="
 
-          meson configure arm64-v8a
-
-
-      # =========================================================
-      # 10. BUILD LC0
-      # =========================================================
       - name: Build Lc0
         working-directory: lc0
         run: |
@@ -250,90 +174,99 @@ jobs:
             -j2
 
 
-      # =========================================================
-      # 11. FIND BINARY
-      # =========================================================
-      - name: Verify Lc0 binary
+      - name: Find binary
         run: |
-          echo "=============================================="
-          echo "SEARCHING LC0 BINARY"
-          echo "=============================================="
-
-          find lc0/arm64-v8a \
-            -type f \
-            -name lc0 \
-            -print
-
           LC0_BIN=$(find lc0/arm64-v8a \
             -type f \
             -name lc0 \
             | head -n 1)
 
           if [ -z "$LC0_BIN" ]; then
-            echo "ERROR: Lc0 binary not found"
+            echo "ERROR: lc0 binary not found"
             exit 1
           fi
 
           echo "LC0_BIN=$LC0_BIN" >> "$GITHUB_ENV"
 
-          echo "=============================================="
-          echo "BINARY INFORMATION"
-          echo "=============================================="
-
           file "$LC0_BIN"
-
           ls -lh "$LC0_BIN"
 
 
-      # =========================================================
-      # 12. RENAME TO SIMPLELOGICS
-      # =========================================================
-      - name: Create SimpleLogics binary
+      - name: Create SimpleLogics package
         run: |
-          mkdir -p output
+          rm -rf output
+
+          mkdir -p output/weights
 
           cp "$LC0_BIN" output/SimpleLogics
 
+          cp \
+            network/weights-t1-256x10.pb.gz \
+            output/weights/
+
           chmod +x output/SimpleLogics
+
+          cat > output/SimpleLogics.config <<EOF
+          --backend=blas
+          --threads=4
+          --nncache=200000
+          --weights=weights/weights-t1-256x10.pb.gz
+          EOF
 
           echo "=============================================="
           echo "SIMPLELOGICS"
           echo "=============================================="
 
-          file output/SimpleLogics
-
           ls -lh output/SimpleLogics
 
-          du -h output/SimpleLogics
+          echo "=============================================="
+          echo "NETWORK"
+          echo "=============================================="
+
+          ls -lh output/weights/
+
+          echo "=============================================="
+          echo "CONFIG"
+          echo "=============================================="
+
+          cat output/SimpleLogics.config
 
 
-      # =========================================================
-      # 13. UCI BASIC TEST
-      # =========================================================
       - name: Test UCI
-        run: |
-          printf "uci\nisready\nquit\n" | ./output/SimpleLogics || true
-
-
-      # =========================================================
-      # 14. PACKAGE
-      # =========================================================
-      - name: Package SimpleLogics
         run: |
           cd output
 
-          zip -9 \
-            SimpleLogics-Lc0-Android-arm64.zip \
-            SimpleLogics
+          printf "uci\nisready\nquit\n" | ./SimpleLogics
+
+
+      - name: Package
+        run: |
+          cd output
+
+          zip -9 -r \
+            ../SimpleLogics-2600-Android-arm64.zip \
+            SimpleLogics \
+            SimpleLogics.config \
+            weights
+
+          cd ..
 
           echo "=============================================="
           echo "FINAL PACKAGE"
           echo "=============================================="
 
-          ls -lh SimpleLogics-Lc0-Android-arm64.zip
+          ls -lh SimpleLogics-2600-Android-arm64.zip
+
+          du -h SimpleLogics-2600-Android-arm64.zip
 
 
-      # =========================================================
+      - name: Upload SimpleLogics 2600
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-2600-Android-arm64
+          path: SimpleLogics-2600-Android-arm64.zip
+          if-no-files-found: error
+          retention-days: 30
       # 15. UPLOAD ARTIFACT
       # =========================================================
       - name: Upload SimpleLogics
