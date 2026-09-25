@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - main
-
   pull_request:
     branches:
       - main
-
   workflow_dispatch:
 
 permissions:
@@ -23,11 +21,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-
       - name: Install build tools
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             git \
             python3 \
@@ -36,10 +32,11 @@ jobs:
             pkg-config \
             unzip \
             wget \
-            curl
+            curl \
+            file \
+            binutils
 
           python3 -m pip install --upgrade meson
-
 
       - name: Setup Android SDK and NDK
         env:
@@ -65,14 +62,12 @@ jobs:
 
           echo "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
-
       - name: Clone Lc0
         run: |
           git clone \
             --depth 1 \
             --branch v0.32.1 \
             https://github.com/LeelaChessZero/lc0.git lc0
-
 
       - name: Download SimpleLogics 2600 Network
         run: |
@@ -90,7 +85,6 @@ jobs:
 
           ls -lh network/weights-t1-256x10.pb.gz
 
-
       - name: Download OpenBLAS
         run: |
           mkdir -p deps
@@ -104,7 +98,6 @@ jobs:
 
           echo "OpenBLAS:"
           find . -type f | sort
-
 
       - name: Locate OpenBLAS
         run: |
@@ -124,7 +117,6 @@ jobs:
 
           echo "OpenBLAS root:"
           echo "$OPENBLAS_ROOT"
-
 
       - name: Create Android cross file
         run: |
@@ -146,12 +138,10 @@ jobs:
 
           cat android-aarch64.ini
 
-
       - name: Check compiler
         run: |
           aarch64-linux-android29-clang --version
           aarch64-linux-android29-clang++ --version
-
 
       - name: Configure Lc0
         working-directory: lc0
@@ -165,14 +155,12 @@ jobs:
             -Dopenblas_libdirs="$OPENBLAS_ROOT/lib" \
             -Ddefault_library=static
 
-
       - name: Build Lc0
         working-directory: lc0
         run: |
           meson compile \
             -C arm64-v8a \
             -j2
-
 
       - name: Find binary
         run: |
@@ -189,8 +177,8 @@ jobs:
           echo "LC0_BIN=$LC0_BIN" >> "$GITHUB_ENV"
 
           file "$LC0_BIN"
-          ls -lh "$LC0_BIN"
 
+          ls -lh "$LC0_BIN"
 
       - name: Create SimpleLogics package
         run: |
@@ -214,10 +202,13 @@ jobs:
           EOF
 
           echo "=============================================="
-          echo "SIMPLELOGICS"
+          echo "BINARY"
           echo "=============================================="
 
-          ls -lh output/SimpleLogics
+          file output/SimpleLogics
+
+          readelf -h output/SimpleLogics | \
+            grep -E "Class:|Machine:|Type:"
 
           echo "=============================================="
           echo "NETWORK"
@@ -231,13 +222,22 @@ jobs:
 
           cat output/SimpleLogics.config
 
-
-      - name: Test UCI
+      - name: Validate Android ARM64 binary
         run: |
-          cd output
+          file output/SimpleLogics
 
-          printf "uci\nisready\nquit\n" | ./SimpleLogics
+          readelf -h output/SimpleLogics | \
+            grep -q "Machine:.*AArch64"
 
+          readelf -h output/SimpleLogics | \
+            grep -q "Class:.*ELF64"
+
+          echo "=============================================="
+          echo "ANDROID ARM64 BINARY: OK"
+          echo "=============================================="
+
+          echo "UCI test skipped because GitHub runner is x86_64."
+          echo "Binary will be tested on Android/DroidFish."
 
       - name: Package
         run: |
@@ -259,20 +259,10 @@ jobs:
 
           du -h SimpleLogics-2600-Android-arm64.zip
 
-
       - name: Upload SimpleLogics 2600
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLogics-2600-Android-arm64
           path: SimpleLogics-2600-Android-arm64.zip
-          if-no-files-found: error
-          retention-days: 30
-      # 15. UPLOAD ARTIFACT
-      # =========================================================
-      - name: Upload SimpleLogics
-        uses: actions/upload-artifact@v4
-        with:
-          name: SimpleLogics-Lc0-Android-arm64
-          path: output/SimpleLogics-Lc0-Android-arm64.zip
           if-no-files-found: error
           retention-days: 30
